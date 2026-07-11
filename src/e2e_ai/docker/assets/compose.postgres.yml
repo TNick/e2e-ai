@@ -1,0 +1,33 @@
+# Reusable PostgreSQL service for e2e-ai's per-test database cloning.
+#
+# Include this from a project compose file, or copy it in via
+# `e2e-ai docker init`. e2e-ai clones a pristine template into a fresh database
+# per test through `docker compose exec <service> psql`, so the only hard
+# requirements are:
+#   * the service is named `postgres` (or matches docker.postgres.service),
+#   * `psql` is available inside the container (the official image ships it),
+#   * the configured user can CREATE/DROP DATABASE (superuser by default).
+#
+# The seeded application database (docker.postgres.source_db) must exist and be
+# migrated/seeded before running `e2e-ai db template`.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Base bootstrap database; the seeded app DB is created by your migrations.
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - e2e_ai_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  e2e_ai_pgdata:

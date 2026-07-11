@@ -1,0 +1,109 @@
+# fr-two reference configuration for e2e-ai.
+#
+# This file is the reference config for target projects: every option is
+# documented. e2e-ai is the E2E control plane (discovery, execution state,
+# leases, failure packets, agent routing, repair, verification); the fr-two
+# adapter owns project-specific details (app stack, storage wipe, database
+# slots, failure families).
+
+# Project identity used in local state, test ids, database slots, and reports.
+project:
+  id: fr-two
+
+# Runtime state is local and ignored by source control.
+state:
+  dir: .e2e-ai
+
+# Repair agents may edit frontend and backend in this full-stack project.
+target:
+  scope: full_stack
+  surfaces:
+    frontend:
+      path: .
+      editable: true
+      role: source
+    backend:
+      path: backend
+      editable: true
+      role: source
+
+# Playwright commands stay project-specific, but e2e-ai owns orchestration.
+playwright:
+  cwd: e2e
+  list_command:
+    - pnpm
+    - exec
+    - playwright
+    - test
+    - --list
+  run_command:
+    - pnpm
+    - exec
+    - playwright
+    - test
+  report_env:
+    json: PLAYWRIGHT_JSON_OUTPUT_NAME   # e2e-ai points this at a per-attempt file
+    blob: PLAYWRIGHT_BLOB_OUTPUT_FILE
+  base_url_env: PLAYWRIGHT_BASE_URL     # frontend URL for the leased slot
+  api_base_env: PLAYWRIGHT_API_BASE     # backend API URL for the leased slot
+  lab_flag_env: E2E_LAB_COMPOSE         # flags the full lab compose stack
+
+# Diagnostic specs are kept in the tree but excluded from normal repair runs.
+# Exclude patterns are regular expressions (search) over the test's selector,
+# spec file, title, and id.
+exclude:
+  tests:
+    - "tests/_diag-.*\\.spec\\.ts"
+
+# fr-two owns app-stack details; e2e-ai owns leases and reset orchestration.
+# The `fr_two` backend uses stable execution slots: the database name and user
+# stay fixed per slot. Before a slot is reused its database is restored from a
+# prebuilt baseline and its file/object storage is wiped clean.
+isolation:
+  backend: fr_two
+  keep_on_failure: true    # keep a failed slot's env for debugging
+  keep_on_success: false   # wipe a passing slot so it is clean for reuse
+  slots:
+    count: 4                       # number of stable execution slots
+    database_prefix: frtwo_e2e_slot  # slot i -> database `frtwo_e2e_slot{i}`
+    database_user: frtwo             # stable DB user shared by all slots
+  storage:
+    wipe_before_attempt: true  # reset file/object storage before each attempt
+    targets:
+      # `{slot_id}` expands to the slot (e.g. `slot0`). Directory targets are
+      # emptied; the minio target is cleared by prefix.
+      - kind: directory
+        name: uploads
+        path: playground/e2e/slots/{slot_id}/uploads
+      - kind: directory
+        name: backend-data
+        path: playground/e2e/slots/{slot_id}/backend-data
+      - kind: directory
+        name: map-renderer
+        path: playground/e2e/slots/{slot_id}/map-renderer
+      - kind: directory
+        name: mapproxy-cache
+        path: playground/e2e/slots/{slot_id}/mapproxy-cache
+      - kind: minio
+        name: lab-bucket
+        bucket: frtwo-lab
+        prefix: e2e/{slot_id}/
+
+# The final gate uses the same e2e-ai orchestrator, not old script logic.
+full_verification:
+  command:
+    - e2e-ai
+    - verify
+
+# Role -> agent plugin (+ profile). A stronger planner/instrumenter with a
+# cheaper implementer keeps token spend modest while planning stays capable.
+agents:
+  planner:
+    plugin: codex
+    profile: difficult
+  implementer:
+    plugin: codex
+    profile: normal
+  instrumenter:
+    plugin: codex
+    profile: difficult

@@ -1,0 +1,17 @@
+research/
+
+# e2e-ai local state (test catalog DB, per-test workdirs, agent runs)
+.e2e-ai/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

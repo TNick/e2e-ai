@@ -1,0 +1,9 @@
+Playwright MCP server
+Usage: @playwright/mcp [options]
+
+Options:
+  --browser <name>     Browser to use
+  --headless           Run headless
+  --isolated           Isolated browser profile
+  --output-dir <path>  Output directory
+  --output-mode file   Output mode

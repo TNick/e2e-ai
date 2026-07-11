@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@0.0.78", "--config", "/tmp/mcp.json"],
+      "transport": "stdio"
+    }
+  },
+  "permissions": {
+    "allow": ["browser_navigate", "browser_snapshot"],
+    "deny": ["browser_run_code_unsafe"],
+    "strict": true
+  }
+}

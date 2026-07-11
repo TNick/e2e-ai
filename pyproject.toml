@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "e2e-ai"
+version = "0.1.0"
+description = "AI-driven loop that runs Playwright e2e tests and fixes failures until green"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Nicu Tofan" }]
+keywords = ["playwright", "e2e", "testing", "ai", "agents"]
+dependencies = [
+    "attrs>=24.0",
+    "click>=8.1",
+    "platformdirs>=4.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+e2e-ai = "e2e_ai.cli:main"
+
+[project.entry-points."e2e_ai.agents"]
+claude = "e2e_ai.agents.builtins:CLAUDE"
+codex = "e2e_ai.agents.builtins:CODEX"
+cursor = "e2e_ai.agents.builtins:CURSOR"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/e2e_ai"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

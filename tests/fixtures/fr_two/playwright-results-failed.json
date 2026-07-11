@@ -1,0 +1,40 @@
+{
+  "config": { "projects": [{ "name": "chromium" }] },
+  "stats": { "expected": 0, "unexpected": 1, "skipped": 0, "flaky": 0 },
+  "suites": [
+    {
+      "title": "map-filter.spec.ts",
+      "file": "tests/map-filter.spec.ts",
+      "specs": [
+        {
+          "title": "filters features on the map",
+          "file": "tests/map-filter.spec.ts",
+          "line": 42,
+          "column": 5,
+          "tests": [
+            {
+              "projectName": "chromium",
+              "results": [
+                {
+                  "status": "failed",
+                  "duration": 8123,
+                  "errors": [
+                    {
+                      "message": "Error: expect(locator).toBeVisible()\n\nLocator: getByTestId('map-filter-panel')\nExpected: visible\nReceived: hidden",
+                      "stack": "at tests/map-filter.spec.ts:42:37",
+                      "location": { "file": "tests/map-filter.spec.ts", "line": 42, "column": 37 }
+                    }
+                  ],
+                  "attachments": [
+                    { "name": "screenshot", "contentType": "image/png", "path": "test-failed-1.png" },
+                    { "name": "trace", "contentType": "application/zip", "path": "trace.zip" }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

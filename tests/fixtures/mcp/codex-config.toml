@@ -1,0 +1,8 @@
+[mcp_servers.playwright]
+required = true
+command = "npx"
+args = ["-y", "@playwright/mcp@0.0.78", "--config", "/tmp/mcp.json"]
+transport = "stdio"
+
+[mcp_servers.playwright.tools]
+allow = ["browser_navigate", "browser_snapshot"]

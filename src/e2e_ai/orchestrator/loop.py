@@ -1,0 +1,863 @@
+"""Repair-loop orchestration: state machine, agents, and test reruns."""
+
+from __future__ import annotations
+
+import logging
+import os
+import sqlite3
+import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
+
+from ..agents.base import AgentPlugin
+from ..agents.registry import AgentRegistry
+from ..analysis import (
+    build_failure_packet,
+    build_repair_context,
+    insert_failure_packet,
+    trim_repair_context,
+)
+from ..config import EffectiveConfig
+from ..inventory.models import DiscoveredTest
+from ..inventory.store import list_runnable_tests
+from ..isolation import IsolationBackend, IsolationContext, create_isolation_backend
+from ..isolation.models import EnvironmentLease
+from ..mcp.models import AgentMcpAttachment
+from ..mcp.sessions import (
+    cleanup_mcp_session,
+    mcp_artifact_summary,
+    prepare_agent_mcp_attachment,
+)
+from ..models import FailureInfo, TestStatus
+from ..planner import plan_is_blocked, test_selector
+from ..runner import (
+    TestRunRequest,
+    TestRunResult,
+    create_attempt_record,
+    finish_attempt_record,
+    new_attempt_id,
+    run_attempt,
+)
+from ..runner.results import load_playwright_json
+from .decisions import (
+    classify_external_blocker,
+    should_escalate_to_instrumentation,
+    should_stop_test,
+)
+from .models import (
+    STATE_EXHAUSTED,
+    STATE_EXTERNAL_BLOCKER,
+    STATE_FAILED,
+    STATE_IMPLEMENTED,
+    STATE_INSTRUMENTING,
+    STATE_PASSED,
+    STATE_PENDING,
+    STATE_PLANNING,
+    STATE_REGRESSED,
+    STATE_RERUNNING,
+    STATE_RUNNING,
+    RepairDecision,
+    TestRepairState,
+)
+from .prompts import (
+    build_implementer_prompt,
+    build_instrumentation_prompt,
+    build_mcp_prompt_section,
+    build_planner_prompt,
+)
+from .state_machine import (
+    EVENT_FAIL,
+    EVENT_IMPLEMENT,
+    EVENT_IMPLEMENTED,
+    EVENT_INSTRUMENT,
+    EVENT_INSTRUMENTED,
+    EVENT_PASS,
+    EVENT_PLAN,
+    EVENT_PLAN_CREATED,
+    EVENT_REGRESS,
+    EVENT_RERUN,
+    EVENT_START,
+    next_state,
+)
+from .store import (
+    create_repair_run,
+    finish_repair_run,
+    has_ever_passed,
+    record_agent_invocation,
+    record_repair_plan,
+    set_plan_outcome,
+)
+
+logger = logging.getLogger(__name__)
+
+Reporter = Callable[[str], None]
+
+DEFAULT_AGENT_TIMEOUT_SECONDS = 1800
+
+
+class TestResult(StrEnum):
+    """Outcome of repairing one test."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+
+
+@dataclass
+class TestReport:
+    """Summary for one test inside a repair run."""
+
+    test_id: str
+    selector: str
+    result: TestResult
+    attempts: int
+    note: str = ""
+
+
+@dataclass
+class LoopSummary:
+    """Aggregate outcome for a repair run."""
+
+    reports: list[TestReport] = field(default_factory=list)
+    run_id: str | None = None
+    status: str = "failed"
+    reason: str | None = None
+
+    @property
+    def passed(self) -> list[TestReport]:
+        return [r for r in self.reports if r.result is TestResult.PASSED]
+
+    @property
+    def failed(self) -> list[TestReport]:
+        return [r for r in self.reports if r.result is TestResult.FAILED]
+
+    @property
+    def blocked(self) -> list[TestReport]:
+        return [r for r in self.reports if r.result is TestResult.BLOCKED]
+
+    @property
+    def all_green(self) -> bool:
+        return bool(self.reports) and not self.failed and not self.blocked
+
+
+def _isolation_context(config: EffectiveConfig) -> IsolationContext:
+    return IsolationContext(
+        project_root=config.project_root,
+        state_dir=config.state_dir,
+        config=config,
+        env={**os.environ},
+    )
+
+
+def _work_dir(config: EffectiveConfig, test_id: str) -> Path:
+    path = config.state_dir / "work" / test_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _runs_dir(config: EffectiveConfig, test_id: str) -> Path:
+    path = config.state_dir / "runs" / test_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _transition(state: TestRepairState, event: str) -> None:
+    state.state = next_state(state.state, event)
+
+
+def _test_report_from_state(
+    test: DiscoveredTest,
+    state: TestRepairState,
+) -> TestReport:
+    selector = test_selector(test)
+    if state.state == STATE_PASSED:
+        result = TestResult.PASSED
+    elif state.state == STATE_EXTERNAL_BLOCKER:
+        result = TestResult.BLOCKED
+    else:
+        result = TestResult.FAILED
+    return TestReport(
+        test_id=test.id,
+        selector=selector,
+        result=result,
+        attempts=state.attempt_count,
+        note=state.note,
+    )
+
+
+def execute_attempt(
+    *,
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    test: DiscoveredTest,
+    attempt_index: int,
+    run_id: str,
+    isolation: IsolationBackend,
+    attempt_id: str | None = None,
+) -> tuple[TestRunResult, FailureInfo | None, object]:
+    """Create environment, run Playwright, and persist the result."""
+
+    attempt_id = attempt_id or new_attempt_id(attempt_index)
+    context = _isolation_context(config)
+    lease = isolation.create_environment(context, test, attempt_id)
+    workdir = _work_dir(config, test.id)
+    request = TestRunRequest(
+        run_id=run_id,
+        test_id=test.id,
+        spec_file=test.spec_file,
+        title=test.title,
+        attempt_index=attempt_index,
+        work_dir=workdir,
+        environment=dict(lease.env),
+        attempt_id=attempt_id,
+        project_name=test.project_name,
+        line=test.line,
+    )
+    result, failure = run_attempt(config, request)
+    create_attempt_record(
+        conn,
+        attempt_id=result.attempt_id,
+        run_id=run_id,
+        test_id=test.id,
+        attempt_index=attempt_index,
+        work_dir=str(result.work_dir or lease.work_dir),
+        database_name=lease.database_name,
+        frontend_url=lease.frontend_url,
+        backend_url=lease.backend_url,
+        environment_id=lease.id,
+    )
+    finish_attempt_record(conn, result)
+    return result, failure, lease
+
+
+def _build_packet(
+    test: DiscoveredTest,
+    result: TestRunResult,
+    failure: FailureInfo | None,
+    lease,
+):
+    report = (
+        load_playwright_json(result.json_report_path)
+        if result.json_report_path.is_file()
+        else None
+    )
+    failure = failure or FailureInfo(error_message="unknown failure")
+    return build_failure_packet(
+        test=test,
+        attempt=result,
+        report=report,
+        lease=lease,
+        failure=failure,
+    )
+
+
+def _new_agent_invocation_id() -> str:
+    return f"agent_{uuid.uuid4().hex[:16]}"
+
+
+def _append_mcp_prompt(
+    prompt: str,
+    *,
+    context,
+    mcp: AgentMcpAttachment | None,
+) -> str:
+    if mcp is not None and mcp.enabled:
+        return prompt + "\n\n" + build_mcp_prompt_section(context=context, mcp=mcp)
+    if mcp is not None and mcp.degraded_reason:
+        return prompt + f"\n\n(MCP unavailable: {mcp.degraded_reason})\n"
+    return prompt
+
+
+def _invoke_agent(
+    registry: AgentRegistry,
+    role: str,
+    prompt: str,
+    *,
+    config: EffectiveConfig,
+    run_id: str,
+    test_id: str,
+    conn: sqlite3.Connection,
+    log_dir: Path,
+    context,
+    lease: EnvironmentLease | None,
+    plugin: AgentPlugin,
+) -> tuple[str, bool, str | None]:
+    agent = registry.role(role)
+    timeout = min(
+        DEFAULT_AGENT_TIMEOUT_SECONDS,
+        config.repair_policy.max_agent_seconds,
+    )
+    invocation_id = _new_agent_invocation_id()
+    mcp: AgentMcpAttachment | None = None
+    if lease is not None and plugin is not None:
+        supports = False
+        if hasattr(plugin, "supports_playwright_mcp"):
+            supports = plugin.supports_playwright_mcp()
+        mcp = prepare_agent_mcp_attachment(
+            config=config,
+            context=context,
+            lease=lease,
+            role=role,
+            plugin_id=agent.id,
+            agent_invocation_id=invocation_id,
+            plugin_supports_mcp=supports,
+        )
+        if mcp.required and not mcp.enabled:
+            return (
+                "",
+                False,
+                "mcp_required:%s" % (mcp.degraded_reason or "setup failed"),
+            )
+    full_prompt = _append_mcp_prompt(prompt, context=context, mcp=mcp)
+    run = agent.run(
+        full_prompt,
+        workdir=config.project_root,
+        timeout=timeout,
+        log_dir=log_dir,
+        mcp=mcp if mcp is not None and mcp.enabled else None,
+    )
+    if mcp is not None and mcp.enabled and mcp.session is not None:
+        summary = mcp_artifact_summary(mcp.session)
+        logger.log(1, "MCP artifacts for %s: %s", invocation_id, summary)
+        cleanup_mcp_session(
+            mcp.session,
+            keep=config.playwright_mcp.keep_artifacts_on_failure or not run.ok,
+        )
+    record_agent_invocation(
+        conn,
+        run_id=run_id,
+        role=role,
+        agent_id=agent.id,
+        command=[agent.id, invocation_id],
+        status="ok" if run.ok else "error",
+        exit_code=run.exit_code,
+        test_id=test_id,
+        stdout_path=str(run.output_path) if run.output_path else None,
+    )
+    text = run.stdout.strip()
+    if not text:
+        text = f"(agent produced no output; exit={run.exit_code})"
+    return text, run.ok, None
+
+
+def handle_failed_attempt(
+    *,
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    test: DiscoveredTest,
+    packet,
+    run_id: str,
+    agents: Mapping[str, AgentPlugin],
+    registry: AgentRegistry,
+    repair_state: TestRepairState,
+    dry_run_agents: bool = False,
+    lease: EnvironmentLease | None = None,
+) -> RepairDecision:
+    """Plan, implement, instrument, or stop after a failed attempt."""
+
+    policy = config.repair_policy
+    context = trim_repair_context(
+        build_repair_context(conn, packet, test=test, config=config)
+    )
+
+    def plugin_for(role):
+        return registry.role(role)
+
+    planner_plugin = registry._plugins.get(  # noqa: SLF001
+        plugin_for("planner").id
+    )
+    implementer_plugin = registry._plugins.get(plugin_for("implementer").id)
+
+    if classify_external_blocker(packet, config=config):
+        return RepairDecision(
+            action="external_blocker",
+            next_state=STATE_EXTERNAL_BLOCKER,
+            stop_run=True,
+            reason="failure classified as external blocker",
+        )
+
+    if should_stop_test(conn, test.id, policy.max_attempts_per_test):
+        return RepairDecision(
+            action="exhausted",
+            next_state=STATE_EXHAUSTED,
+            reason="max repair attempts reached for this test",
+        )
+
+    escalate = should_escalate_to_instrumentation(
+        conn,
+        test.id,
+        packet.signature,
+        max_same_signature=policy.max_same_signature_attempts,
+    )
+
+    log_dir = _runs_dir(config, test.id) / "agents"
+
+    if escalate:
+        _transition(repair_state, EVENT_INSTRUMENT)
+        instr_prompt = build_instrumentation_prompt(context, config=config, test=test)
+        if dry_run_agents:
+            return RepairDecision(
+                action="instrument_dry_run",
+                next_state=STATE_INSTRUMENTING,
+                dry_run_prompt=instr_prompt,
+            )
+        _, instr_ok, mcp_err = _invoke_agent(
+            registry,
+            "instrumenter",
+            instr_prompt,
+            config=config,
+            run_id=run_id,
+            test_id=test.id,
+            conn=conn,
+            log_dir=log_dir,
+            context=context,
+            lease=lease,
+            plugin=registry._plugins.get(registry.role("instrumenter").id),
+        )
+        if mcp_err:
+            return RepairDecision(
+                action="mcp_blocker",
+                next_state=STATE_EXTERNAL_BLOCKER,
+                stop_run=True,
+                reason=mcp_err,
+            )
+        _transition(repair_state, EVENT_INSTRUMENTED)
+        if not instr_ok:
+            repair_state.note = "instrumenter agent failed"
+        context = trim_repair_context(
+            build_repair_context(conn, packet, test=test, config=config)
+        )
+    else:
+        start = repair_state.state
+        if start == STATE_REGRESSED:
+            _transition(repair_state, EVENT_PLAN)
+        else:
+            _transition(repair_state, EVENT_PLAN)
+
+    plan_prompt = build_planner_prompt(context, config=config, test=test)
+    if dry_run_agents:
+        return RepairDecision(
+            action="plan_dry_run",
+            next_state=STATE_PLANNING,
+            dry_run_prompt=plan_prompt,
+        )
+
+    plan_text, ok, mcp_err = _invoke_agent(
+        registry,
+        "planner",
+        plan_prompt,
+        config=config,
+        run_id=run_id,
+        test_id=test.id,
+        conn=conn,
+        log_dir=log_dir,
+        context=context,
+        lease=lease,
+        plugin=planner_plugin,
+    )
+    if mcp_err:
+        return RepairDecision(
+            action="mcp_blocker",
+            next_state=STATE_EXTERNAL_BLOCKER,
+            stop_run=True,
+            reason=mcp_err,
+        )
+    _transition(repair_state, EVENT_PLAN_CREATED)
+
+    blocked = plan_is_blocked(plan_text)
+    if blocked:
+        return RepairDecision(
+            action="planner_blocked",
+            next_state=STATE_EXTERNAL_BLOCKER,
+            stop_run=True,
+            reason=blocked,
+        )
+
+    plan_id = record_repair_plan(
+        conn,
+        test_id=test.id,
+        failure_packet_id=packet.id,
+        agent_id=registry.role("planner").id,
+        plan_text=plan_text,
+    )
+    repair_state.last_plan_id = plan_id
+
+    _transition(repair_state, EVENT_IMPLEMENT)
+    impl_prompt = build_implementer_prompt(plan_text, context, config=config, test=test)
+    impl_text, impl_ok, impl_mcp_err = _invoke_agent(
+        registry,
+        "implementer",
+        impl_prompt,
+        config=config,
+        run_id=run_id,
+        test_id=test.id,
+        conn=conn,
+        log_dir=log_dir,
+        context=context,
+        lease=lease,
+        plugin=implementer_plugin,
+    )
+    if impl_mcp_err:
+        return RepairDecision(
+            action="mcp_blocker",
+            next_state=STATE_EXTERNAL_BLOCKER,
+            stop_run=True,
+            reason=impl_mcp_err,
+        )
+    _ = impl_text
+    _transition(repair_state, EVENT_IMPLEMENTED)
+    set_plan_outcome(
+        conn,
+        plan_id,
+        "implemented" if impl_ok else "implement_failed",
+    )
+    repair_state.repair_round += 1
+
+    return RepairDecision(
+        action="rerun",
+        next_state=STATE_IMPLEMENTED,
+        plan_id=plan_id,
+    )
+
+
+def run_one_test_until_resolved(
+    *,
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    test: DiscoveredTest,
+    run_id: str,
+    isolation: IsolationBackend,
+    agents: Mapping[str, AgentPlugin],
+    registry: AgentRegistry,
+    reporter: Reporter | None = None,
+    dry_run_agents: bool = False,
+) -> TestRepairState:
+    """Run and repair one test until it passes or blocks."""
+
+    say = reporter or (lambda _msg: None)
+    regression = has_ever_passed(conn, test.id)
+    repair_state = TestRepairState(
+        test_id=test.id,
+        is_regression=regression,
+    )
+    selector = test_selector(test)
+    say(">> {}{}".format(selector, " (regression)" if regression else ""))
+
+    attempt_budget = max(1, config.repair_policy.max_attempts_per_test)
+    attempt_index = 0
+    lease = None
+
+    for attempt in range(attempt_budget):
+        if repair_state.state == STATE_PENDING:
+            _transition(repair_state, EVENT_START)
+
+        result, failure, lease = execute_attempt(
+            conn=conn,
+            config=config,
+            test=test,
+            attempt_index=attempt_index,
+            run_id=run_id,
+            isolation=isolation,
+        )
+        repair_state.attempt_count += 1
+        attempt_index += 1
+
+        if result.passed:
+            if repair_state.state == STATE_RERUNNING:
+                _transition(repair_state, EVENT_PASS)
+            else:
+                repair_state.state = STATE_PASSED
+            conn.execute(
+                "UPDATE tests SET last_status = ? WHERE id = ?",
+                (TestStatus.PASSING.value, test.id),
+            )
+            conn.commit()
+            if lease is not None:
+                isolation.cleanup_environment(lease, "passed")
+            say(f"  [pass] passed on attempt {repair_state.attempt_count}")
+            return repair_state
+
+        # Failed run.
+        if regression and repair_state.state == STATE_RUNNING and attempt == 0:
+            _transition(repair_state, EVENT_REGRESS)
+        elif repair_state.state == STATE_RERUNNING:
+            _transition(repair_state, EVENT_FAIL)
+        elif repair_state.state == STATE_RUNNING:
+            _transition(repair_state, EVENT_FAIL)
+
+        failure = failure or FailureInfo(error_message="unknown failure")
+
+        if failure.is_environmental():
+            repair_state.state = STATE_EXTERNAL_BLOCKER
+            repair_state.note = "failure looks environmental (setup/services), not code"
+            conn.execute(
+                "UPDATE tests SET last_status = ? WHERE id = ?",
+                (TestStatus.BLOCKED.value, test.id),
+            )
+            conn.commit()
+            if lease is not None:
+                isolation.cleanup_environment(lease, "blocked")
+            say(f"  [blocked] {repair_state.note}")
+            return repair_state
+
+        packet = _build_packet(test, result, failure, lease)
+        insert_failure_packet(conn, packet)
+        repair_state.last_packet_id = packet.id
+        conn.execute(
+            "UPDATE tests SET last_status = ? WHERE id = ?",
+            (TestStatus.FAILING.value, test.id),
+        )
+        conn.commit()
+
+        first_line = (
+            failure.error_message.splitlines()[0][:120]
+            if failure.error_message
+            else "no message"
+        )
+        say(
+            f"  [fail] failed (attempt {repair_state.attempt_count}/"
+            f"{attempt_budget}): {first_line}"
+        )
+
+        if attempt >= attempt_budget - 1:
+            break
+
+        decision = handle_failed_attempt(
+            conn=conn,
+            config=config,
+            test=test,
+            packet=packet,
+            run_id=run_id,
+            agents=agents,
+            registry=registry,
+            repair_state=repair_state,
+            dry_run_agents=dry_run_agents,
+            lease=lease,
+        )
+
+        if decision.dry_run_prompt:
+            say("  ~ dry-run: would invoke agents")
+            if lease is not None:
+                isolation.cleanup_environment(lease, "failed")
+            repair_state.note = "dry-run-agents"
+            repair_state.state = STATE_FAILED
+            return repair_state
+
+        if decision.stop_run:
+            repair_state.state = decision.next_state
+            if decision.next_state == STATE_EXTERNAL_BLOCKER:
+                conn.execute(
+                    "UPDATE tests SET last_status = ? WHERE id = ?",
+                    (TestStatus.BLOCKED.value, test.id),
+                )
+            conn.commit()
+            repair_state.note = decision.reason or ""
+            if lease is not None:
+                isolation.cleanup_environment(lease, "blocked")
+            say("  [blocked] %s" % (decision.reason or "stopped"))
+            return repair_state
+
+        if decision.action == "exhausted":
+            repair_state.state = STATE_EXHAUSTED
+            repair_state.note = decision.reason or "attempts exhausted"
+            if lease is not None:
+                isolation.cleanup_environment(lease, "failed")
+            say(f"  [fail] {repair_state.note}")
+            return repair_state
+
+        _transition(repair_state, EVENT_RERUN)
+
+    repair_state.state = STATE_EXHAUSTED
+    repair_state.note = "attempts exhausted"
+    if lease is not None:
+        isolation.cleanup_environment(lease, "failed")
+    say("  [fail] giving up after exhausting attempts")
+    return repair_state
+
+
+def run_repair_loop(
+    config: EffectiveConfig,
+    conn: sqlite3.Connection,
+    registry: AgentRegistry,
+    *,
+    isolation: IsolationBackend | None = None,
+    reporter: Reporter | None = None,
+    limit: int | None = None,
+    test_ids: list[str] | None = None,
+    dry_run_agents: bool = False,
+    stop_on_failure: bool = False,
+) -> LoopSummary:
+    """Run tests until green or blocked."""
+
+    backend = isolation or create_isolation_backend(config)
+    plugins = registry._plugins  # noqa: SLF001 — orchestrator needs plugin map
+    say = reporter or (lambda _msg: None)
+
+    for path in (config.state_dir / "work", config.state_dir / "runs"):
+        path.mkdir(parents=True, exist_ok=True)
+
+    pending = list_runnable_tests(conn, config.project_id)
+    if test_ids is not None:
+        wanted = set(test_ids)
+        pending = [t for t in pending if t.id in wanted]
+    if limit is not None:
+        pending = pending[:limit]
+
+    summary = LoopSummary()
+    run_id = create_repair_run(conn, config)
+    summary.run_id = run_id
+    stopped = False
+    stop_reason: str | None = None
+
+    say(f"Scheduling {len(pending)} test(s).")
+    context = _isolation_context(config)
+
+    try:
+        backend.prepare_baseline(context)
+        for test in pending:
+            state = run_one_test_until_resolved(
+                conn=conn,
+                config=config,
+                test=test,
+                run_id=run_id,
+                isolation=backend,
+                agents=plugins,
+                registry=registry,
+                reporter=say,
+                dry_run_agents=dry_run_agents,
+            )
+            summary.reports.append(_test_report_from_state(test, state))
+
+            if state.state == STATE_EXTERNAL_BLOCKER:
+                if config.repair_policy.stop_on_first_unsolvable:
+                    stopped = True
+                    stop_reason = state.note
+                    break
+            if stop_on_failure and state.state != STATE_PASSED:
+                stopped = True
+                stop_reason = "stop on failure"
+                break
+    finally:
+        if stopped:
+            status = "stopped"
+        elif summary.all_green:
+            status = "passed"
+        else:
+            status = "failed"
+        finish_repair_run(conn, run_id, status, stop_reason)
+        summary.status = status
+        summary.reason = stop_reason
+
+    return summary
+
+
+# Backward-compatible FixLoop wrapper used by CLI and older tests.
+class FixLoop:
+    """Sequential fix loop delegating to :func:`run_repair_loop`."""
+
+    def __init__(
+        self,
+        config: EffectiveConfig,
+        conn: sqlite3.Connection,
+        registry: AgentRegistry,
+        *,
+        backend: IsolationBackend | None = None,
+        reporter: Reporter | None = None,
+        dry_run: bool = False,
+    ) -> None:
+        self.config = config
+        self.conn = conn
+        self.registry = registry
+        self.backend = backend or create_isolation_backend(config)
+        self.dry_run = dry_run
+        self._say = reporter or (lambda msg: None)
+        self.store = _LegacyStore(conn)
+
+    def ensure_dirs(self) -> None:
+        for path in (
+            self.config.state_dir / "work",
+            self.config.state_dir / "runs",
+        ):
+            path.mkdir(parents=True, exist_ok=True)
+
+    def fix_one_test(self, test: DiscoveredTest, *, run_id: str) -> TestReport:
+        plugins = self.registry._plugins  # noqa: SLF001
+        state = run_one_test_until_resolved(
+            conn=self.conn,
+            config=self.config,
+            test=test,
+            run_id=run_id,
+            isolation=self.backend,
+            agents=plugins,
+            registry=self.registry,
+            reporter=self._say,
+            dry_run_agents=self.dry_run,
+        )
+        return _test_report_from_state(test, state)
+
+    def run(
+        self,
+        *,
+        limit: int | None = None,
+        test_ids: list[str] | None = None,
+        stop_on_failure: bool = False,
+    ) -> LoopSummary:
+        return run_repair_loop(
+            self.config,
+            self.conn,
+            self.registry,
+            isolation=self.backend,
+            reporter=self._say,
+            limit=limit,
+            test_ids=test_ids,
+            dry_run_agents=self.dry_run,
+            stop_on_failure=stop_on_failure,
+        )
+
+
+class _LegacyStore:
+    """Minimal adapter so ``loop.store`` keeps working in tests."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        from ..repair.store import RepairStore
+
+        self._inner = RepairStore(conn)
+
+    def start_run(self, project_id: str, *, reason: str | None = None) -> str:
+        return self._inner.start_run(project_id, reason=reason)
+
+    def finish_run(self, run_id: str, *, status: str, reason: str | None = None):
+        return self._inner.finish_run(run_id, status=status, reason=reason)
+
+    def has_ever_passed(self, test_id: str) -> bool:
+        return self._inner.has_ever_passed(test_id)
+
+    def previous_plans(self, test_id: str, *, limit: int = 10):
+        return self._inner.previous_plans(test_id, limit=limit)
+
+    def previous_failures(self, test_id: str, *, limit: int = 10):
+        return self._inner.previous_failures(test_id, limit=limit)
+
+    def record_plan(self, **kwargs):
+        return self._inner.record_plan(**kwargs)
+
+    def set_plan_outcome(self, plan_id: str, outcome: str) -> None:
+        return self._inner.set_plan_outcome(plan_id, outcome)
+
+    def record_agent_invocation(self, **kwargs):
+        return self._inner.record_agent_invocation(**kwargs)
+
+    def set_test_status(self, test_id: str, status: TestStatus) -> None:
+        return self._inner.set_test_status(test_id, status)
+
+
+def build_backend(config: EffectiveConfig) -> IsolationBackend:
+    """Return the configured isolation backend."""
+
+    return create_isolation_backend(config)
+
+
+def default_reporter(msg: str) -> None:  # pragma: no cover
+    print(msg, flush=True)

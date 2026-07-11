@@ -1,0 +1,14 @@
+agents:
+  codex:
+    enabled: true
+    executable: codex
+  claude:
+    enabled: true
+    executable: claude
+  cursor:
+    enabled: true
+    executable: agent
+
+routing:
+  allow_canary: false
+  long_task_min_remaining_percent: 25
