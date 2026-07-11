@@ -44,6 +44,22 @@ def _selector(test: DiscoveredTest) -> str:
     return f"{test.spec_file} › {test.title}"
 
 
+def _exclude_match_fields(test: DiscoveredTest) -> tuple[str, ...]:
+    """Return fields to match exclude patterns against."""
+
+    spec_file = test.spec_file.replace("\\", "/")
+    fields = (
+        _selector(test),
+        spec_file,
+        test.title,
+        test.id,
+    )
+    if "/" not in spec_file:
+        # Playwright list output often omits the tests/ prefix from spec paths.
+        fields = (*fields, f"tests/{spec_file}")
+    return fields
+
+
 def apply_excludes(
     tests: Sequence[DiscoveredTest],
     patterns: Sequence[str],
@@ -54,7 +70,7 @@ def apply_excludes(
     reasons: dict[str, str | None] = {}
     for test in tests:
         reason: str | None = None
-        candidates = (_selector(test), test.spec_file, test.title, test.id)
+        candidates = _exclude_match_fields(test)
         for pattern in compiled:
             if any(pattern.search(field) for field in candidates):
                 reason = f"matched exclude pattern {pattern.pattern!r}"

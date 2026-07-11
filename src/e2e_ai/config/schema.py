@@ -18,3 +18,11 @@ VALID_ISOLATION_BACKENDS: frozenset[str] = frozenset(
         "fr_two",
     }
 )
+
+VALID_RUNTIME_BACKENDS: frozenset[str] = frozenset({"none", "docker_compose"})
+
+VALID_RUNTIME_STOP_POLICIES: frozenset[str] = frozenset(
+    {"never", "on_success", "always"}
+)
+
+VALID_RUNTIME_HEALTH_CHECK_KINDS: frozenset[str] = frozenset({"http", "tcp", "command"})

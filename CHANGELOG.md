@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- GitHub Actions publish workflow for PyPI releases, with a release-version
+  guard that blocks publishing when the Git tag does not match
+  `pyproject.toml`.
+- `target_runtime` configuration and reusable Docker Compose startup for target
+  projects. `e2e-ai run`, `verify` (run mode), and `repair` start configured
+  support services, wait for health checks, then prepare isolation and run
+  Playwright. Runtime logs live under `.e2e-ai/runs/<run-id>/runtime/`.
+- fr-two `target_runtime` defaults and validation in the fr-two adapter; fr-two
+  `e2e-ai.yml` declares the Docker lab stack startup contract.
 - `e2e-ai verify` — the clean gate. Runs the full runnable suite once (no agents)
   and passes only when all tests are green, or with `--report <file|dir>` parses
   existing Playwright JSON reports (including sharded runs) and gates on them
@@ -22,6 +31,12 @@ All notable changes to this project will be documented in this file.
   slot id + stable database name in connection errors.
 
 ### Fixed
+
+- Wire the `fr_two` isolation backend into the factory so `e2e-ai run` and
+  `repair` can lease stable fr-two execution slots instead of failing with
+  "not implemented yet".
+- Exclude patterns with a `tests/` prefix now match Playwright list output that
+  omits that prefix from bare spec file names (e.g. fr-two `_diag-*` specs).
 
 - Broke a `config -> mcp -> analysis -> runner/agents -> config` import cycle by
   making `e2e_ai.mcp` export its API lazily (PEP 562), so importing

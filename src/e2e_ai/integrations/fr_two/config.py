@@ -60,6 +60,54 @@ def default_fr_two_config() -> dict[str, Any]:
             "lab_flag_env": "E2E_LAB_COMPOSE",
         },
         "exclude": {"tests": [r"tests/_diag-.*\.spec\.ts"]},
+        "target_runtime": {
+            "backend": "docker_compose",
+            "cwd": "docker",
+            "project_name": "fr-two-e2e",
+            "compose_files": ["compose.yml"],
+            "env_files": ["env.docker"],
+            "profiles": [
+                "bundled-postgres",
+                "seed-data",
+                "map-cache",
+                "http-cache",
+            ],
+            "env": {
+                "COMPOSE_PROFILES": "bundled-postgres,seed-data,map-cache,http-cache",
+                "FRTWO_MAP_CACHE_ENABLED": "true",
+                "FRTWO_MAP_CACHE_URL": "http://mapproxy:8080",
+                "FRTWO_RESI_QGIS_RENDER_ENABLED": "true",
+                "E2E_LAB_COMPOSE": "1",
+            },
+            "start": {
+                "detach": True,
+                "remove_orphans": True,
+                "wait": True,
+                "timeout_seconds": 240,
+            },
+            "health_checks": [
+                {
+                    "name": "backend",
+                    "kind": "http",
+                    "url": "http://127.0.0.1:8000/api/health",
+                    "timeout_seconds": 90,
+                },
+                {
+                    "name": "frontend",
+                    "kind": "http",
+                    "url": "http://127.0.0.1:8080/",
+                    "timeout_seconds": 90,
+                },
+                {
+                    "name": "postgres",
+                    "kind": "tcp",
+                    "host": "127.0.0.1",
+                    "port": 5432,
+                    "timeout_seconds": 90,
+                },
+            ],
+            "stop": {"policy": "never"},
+        },
         "isolation": {
             "backend": "fr_two",
             "keep_on_failure": True,
@@ -158,3 +206,23 @@ def validate_fr_two_config(config: EffectiveConfig) -> None:
         raise ConfigError("isolation.slots.database_prefix is required")
     if not slots.get("database_user"):
         raise ConfigError("isolation.slots.database_user is required")
+    runtime = load_fr_two_raw(config).get("target_runtime")
+    if not isinstance(runtime, dict):
+        raise ConfigError("fr-two config requires target_runtime")
+    if runtime.get("backend") != "docker_compose":
+        raise ConfigError(
+            "fr-two adapter requires target_runtime.backend: docker_compose, got "
+            f"{runtime.get('backend')!r}"
+        )
+    health_names = {
+        str(item.get("name"))
+        for item in runtime.get("health_checks") or []
+        if isinstance(item, dict) and item.get("name")
+    }
+    required_checks = {"backend", "frontend", "postgres"}
+    missing = required_checks - health_names
+    if missing:
+        raise ConfigError(
+            "fr-two target_runtime.health_checks must include: "
+            + ", ".join(sorted(missing))
+        )

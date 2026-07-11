@@ -94,6 +94,9 @@ class FrTwoIsolationBackend:
     slots: tuple[FrTwoSlot, ...] = field()
 
     # ── IsolationBackend protocol ───────────────────────────────────────────
+    def prepare_baseline(self, context: IsolationContext) -> None:
+        prepare_fr_two_baseline(context)
+
     def create_environment(
         self,
         context: IsolationContext,

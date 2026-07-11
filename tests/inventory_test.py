@@ -242,6 +242,35 @@ class TestInventoryStore:
         assert excluded == 1
         conn.close()
 
+    def test_exclude_matches_tests_prefixed_spec_paths(self, tmp_path: Path) -> None:
+        config = _effective_config(
+            tmp_path,
+            exclude=(r"tests/_diag-.*\.spec\.ts",),
+        )
+        inventory = parse_playwright_list(
+            json.dumps(
+                {
+                    "suites": [
+                        {
+                            "title": "_diag-console.spec.ts",
+                            "file": "_diag-console.spec.ts",
+                            "specs": [
+                                {
+                                    "title": "diag: capture console",
+                                    "file": "_diag-console.spec.ts",
+                                    "line": 3,
+                                    "tests": [{"projectName": "chromium"}],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
+            config.project_id,
+        )
+        reasons = apply_excludes(inventory.tests, config.exclude)
+        assert reasons[inventory.tests[0].id] is not None
+
     def test_runnable_tests_are_deterministic(self, tmp_path: Path) -> None:
         config = _effective_config(tmp_path, exclude=(r"flaky\.spec\.ts",))
         conn = ensure_database(tmp_path / "state.sqlite3")

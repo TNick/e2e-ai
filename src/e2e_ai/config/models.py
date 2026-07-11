@@ -176,6 +176,64 @@ class RoutingConfig:
 
 
 @define
+class RuntimeStartConfig:
+    """Docker Compose startup options for target runtime."""
+
+    command: str = field(default="up")
+    detach: bool = field(default=True)
+    build: bool = field(default=False)
+    remove_orphans: bool = field(default=True)
+    wait: bool = field(default=True)
+    timeout_seconds: int = field(default=180)
+
+
+@define
+class RuntimeStopConfig:
+    """Target runtime teardown policy."""
+
+    policy: str = field(default="never")
+    command: str = field(default="down")
+    remove_volumes: bool = field(default=False)
+
+
+@define
+class RuntimeHealthCheckConfig:
+    """One readiness probe for the target runtime."""
+
+    name: str = field()
+    kind: str = field()
+    timeout_seconds: int = field(default=60)
+    url: str | None = field(default=None)
+    host: str | None = field(default=None)
+    port: int | None = field(default=None)
+    argv: tuple[str, ...] = field(factory=tuple)
+
+
+@define
+class DockerComposeRuntimeConfig:
+    """Docker Compose target runtime settings."""
+
+    cwd: str = field(default=".")
+    project_name: str | None = field(default=None)
+    compose_files: tuple[str, ...] = field(factory=tuple)
+    env_files: tuple[str, ...] = field(factory=tuple)
+    profiles: tuple[str, ...] = field(factory=tuple)
+    services: tuple[str, ...] = field(factory=tuple)
+    env: Mapping[str, str] = field(factory=dict)
+    start: RuntimeStartConfig = field(factory=RuntimeStartConfig)
+    stop: RuntimeStopConfig = field(factory=RuntimeStopConfig)
+    health_checks: tuple[RuntimeHealthCheckConfig, ...] = field(factory=tuple)
+
+
+@define
+class TargetRuntimeConfig:
+    """Target support-service lifecycle settings."""
+
+    backend: str = field(default="none")
+    docker_compose: DockerComposeRuntimeConfig | None = field(default=None)
+
+
+@define
 class ProjectConfig:
     """Project-level e2e-ai configuration."""
 
@@ -189,6 +247,7 @@ class ProjectConfig:
     full_verification: FullVerificationConfig | None = field(default=None)
     playwright_mcp: PlaywrightMcpConfig = field(factory=_default_playwright_mcp)
     target: TargetConfig = field(factory=default_target_config)
+    target_runtime: TargetRuntimeConfig = field(factory=TargetRuntimeConfig)
 
 
 @define
@@ -215,5 +274,6 @@ class EffectiveConfig:
     full_verification: FullVerificationConfig | None = field(default=None)
     playwright_mcp: PlaywrightMcpConfig = field(factory=_default_playwright_mcp)
     target: TargetConfig = field(factory=default_target_config)
+    target_runtime: TargetRuntimeConfig = field(factory=TargetRuntimeConfig)
     project_config_path: Path | None = field(default=None)
     user_config_path: Path | None = field(default=None)

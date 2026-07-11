@@ -142,7 +142,7 @@ class TestRegistry:
         with pytest.raises(ConfigError, match="unknown isolation backend"):
             create_isolation_backend(config)
 
-    def test_fr_two_backend_not_implemented_yet(self, tmp_path: Path) -> None:
+    def test_fr_two_backend_is_available(self, tmp_path: Path) -> None:
         config = _effective_config(tmp_path, backend="fr_two")
-        with pytest.raises(ConfigError, match="not implemented yet"):
-            create_isolation_backend(config)
+        backend = create_isolation_backend(config)
+        assert backend.__class__.__name__ == "FrTwoIsolationBackend"

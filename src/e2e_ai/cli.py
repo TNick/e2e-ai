@@ -21,7 +21,7 @@ from .config.detect import detect_target_layout
 from .config.scaffold import build_scaffold_from_detection, render_project_config_yaml
 from .config.target import scope_flag_to_value
 from .db import database_path, ensure_database
-from .errors import ConfigError, DockerError, E2eAiError
+from .errors import ConfigError, DockerError, E2eAiError, TargetRuntimeError
 from .inventory.store import discover_inventory, ensure_state_layout
 from .isolation import (
     POSTGRES_BACKENDS,
@@ -31,6 +31,7 @@ from .isolation import (
 )
 from .loop import FixLoop, TestResult, build_backend, default_reporter
 from .runner.results import load_playwright_json, summarize_playwright_json
+from .runtime.docker_compose import resolve_runtime_path, runtime_cwd
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,32 @@ def build_cli() -> click.Group:
         click.echo(f"project root: {config.project_root}")
         click.echo(f"state dir: {config.state_dir}")
         click.echo(f"isolation backend: {config.isolation.backend}")
+        runtime = config.target_runtime
+        click.echo(f"target runtime: {runtime.backend}")
+        if runtime.backend == "docker_compose" and runtime.docker_compose is not None:
+            compose = runtime.docker_compose
+            click.echo(f"runtime compose files: {len(compose.compose_files)}")
+            if compose.services:
+                click.echo(f"runtime services: {', '.join(compose.services)}")
+            else:
+                click.echo("runtime services: (all)")
+            click.echo(f"runtime stop policy: {compose.stop.policy}")
+            click.echo(f"runtime health checks: {len(compose.health_checks)}")
+            cwd = runtime_cwd(config.project_root, compose)
+            missing = [
+                path
+                for path in compose.compose_files
+                if not resolve_runtime_path(
+                    config.project_root,
+                    path,
+                    base=cwd,
+                ).is_file()
+            ]
+            if missing:
+                click.echo(
+                    "runtime compose files missing: "
+                    + ", ".join(str(item) for item in missing)
+                )
         click.echo(f"exclude patterns: {len(config.exclude)}")
         target = config.target
         click.echo(f"target scope: {target.scope}")
@@ -221,6 +248,12 @@ def build_cli() -> click.Group:
         show_default=True,
         help="Refresh the inventory before running.",
     )
+    @click.option(
+        "--start-runtime/--no-start-runtime",
+        default=True,
+        show_default=True,
+        help="Start configured target Docker support before running tests.",
+    )
     def run(
         project_root: Path,
         test_id: str | None,
@@ -228,6 +261,7 @@ def build_cli() -> click.Group:
         fail_fast: bool,
         limit: int | None,
         rediscover: bool,
+        start_runtime: bool,
     ) -> None:
         """Run runnable tests once each and record results (no fixing)."""
 
@@ -255,7 +289,10 @@ def build_cli() -> click.Group:
                 limit=limit,
                 test_ids=[test_id] if test_id else None,
                 stop_on_failure=fail_fast,
+                start_runtime=start_runtime,
             )
+        except TargetRuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
         finally:
             conn.close()
         if test_id and not summary.reports:
@@ -298,6 +335,12 @@ def build_cli() -> click.Group:
         is_flag=True,
         help="Alias for --dry-run-agents.",
     )
+    @click.option(
+        "--start-runtime/--no-start-runtime",
+        default=True,
+        show_default=True,
+        help="Start configured target Docker support before running tests.",
+    )
     def repair(
         project_root: Path,
         limit: int | None,
@@ -307,6 +350,7 @@ def build_cli() -> click.Group:
         skip_login_check: bool,
         dry_run_agents: bool,
         dry_run: bool,
+        start_runtime: bool,
     ) -> None:
         """Run the AI fix loop until tests pass or are judged unsolvable."""
 
@@ -348,7 +392,10 @@ def build_cli() -> click.Group:
             summary = loop.run(
                 limit=limit,
                 test_ids=[test_id] if test_id else None,
+                start_runtime=start_runtime,
             )
+        except TargetRuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
         finally:
             conn.close()
         if test_id and not summary.reports:
@@ -475,12 +522,19 @@ def build_cli() -> click.Group:
     @click.option(
         "--limit", type=int, default=None, help="Only run the first N tests (run mode)."
     )
+    @click.option(
+        "--start-runtime/--no-start-runtime",
+        default=True,
+        show_default=True,
+        help="Start configured target Docker support before running tests.",
+    )
     def verify(
         project_root: Path,
         reports: tuple[Path, ...],
         allow_skips: bool,
         rediscover: bool,
         limit: int | None,
+        start_runtime: bool,
     ) -> None:
         """Assert an E2E run is clean — the final gate.
 
@@ -510,7 +564,9 @@ def build_cli() -> click.Group:
                 dry_run=True,
             )
             loop.ensure_dirs()
-            summary = loop.run(limit=limit)
+            summary = loop.run(limit=limit, start_runtime=start_runtime)
+        except TargetRuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
         finally:
             conn.close()
         _print_summary(summary)
@@ -571,17 +627,9 @@ def _isolation_context(config: EffectiveConfig) -> IsolationContext:
 
 
 def _prepare_backend(config: EffectiveConfig):
-    """Build the isolation backend and ensure its baseline exists."""
+    """Build the isolation backend for a command run."""
 
-    backend = build_backend(config)
-    if config.isolation.backend in POSTGRES_BACKENDS:
-        try:
-            backend.prepare_baseline(_isolation_context(config))
-        except DockerError as exc:
-            raise click.ClickException(
-                f"could not prepare isolation backend: {exc}"
-            ) from exc
-    return backend
+    return build_backend(config)
 
 
 def _iter_report_files(paths: list[Path]) -> list[Path]:

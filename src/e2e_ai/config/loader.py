@@ -22,6 +22,7 @@ from .defaults import (
 from .models import (
     AgentConfig,
     CommandSpec,
+    DockerComposeRuntimeConfig,
     EffectiveConfig,
     FullVerificationConfig,
     IsolationConfig,
@@ -31,7 +32,11 @@ from .models import (
     ProjectConfig,
     RepairPolicy,
     RoutingConfig,
+    RuntimeHealthCheckConfig,
+    RuntimeStartConfig,
+    RuntimeStopConfig,
     TargetConfig,
+    TargetRuntimeConfig,
     TargetSurfaceConfig,
     UserConfig,
     default_target_config,
@@ -447,6 +452,110 @@ def _parse_target_config(data: object) -> TargetConfig:
     return TargetConfig(scope=scope, surfaces=surfaces)
 
 
+def _parse_runtime_health_checks(data: object) -> tuple[RuntimeHealthCheckConfig, ...]:
+    if data is None:
+        return ()
+    if not isinstance(data, list):
+        raise ConfigError("target_runtime.health_checks must be a list")
+    checks: list[RuntimeHealthCheckConfig] = []
+    for index, raw in enumerate(data):
+        mapping = _require_mapping(raw, f"target_runtime.health_checks[{index}]")
+        argv_raw = mapping.get("argv") or mapping.get("command")
+        argv: tuple[str, ...] = ()
+        if argv_raw is not None:
+            spec = _parse_command_spec(
+                argv_raw,
+                f"target_runtime.health_checks[{index}].argv",
+            )
+            if spec is not None:
+                argv = spec.argv
+        port = mapping.get("port")
+        checks.append(
+            RuntimeHealthCheckConfig(
+                name=str(mapping["name"]),
+                kind=str(mapping["kind"]),
+                timeout_seconds=int(mapping.get("timeout_seconds", 60)),
+                url=str(mapping["url"]) if mapping.get("url") is not None else None,
+                host=str(mapping["host"]) if mapping.get("host") is not None else None,
+                port=int(port) if port is not None else None,
+                argv=argv,
+            )
+        )
+    return tuple(checks)
+
+
+def _parse_docker_compose_runtime(data: object) -> DockerComposeRuntimeConfig:
+    if data is None:
+        return DockerComposeRuntimeConfig()
+    mapping = _require_mapping(data, "target_runtime.docker_compose")
+    start_raw = mapping.get("start")
+    stop_raw = mapping.get("stop")
+    start = RuntimeStartConfig()
+    stop = RuntimeStopConfig()
+    if start_raw is not None:
+        start_map = _require_mapping(start_raw, "target_runtime.start")
+        start = RuntimeStartConfig(
+            command=str(start_map.get("command", start.command)),
+            detach=bool(start_map.get("detach", start.detach)),
+            build=bool(start_map.get("build", start.build)),
+            remove_orphans=bool(start_map.get("remove_orphans", start.remove_orphans)),
+            wait=bool(start_map.get("wait", start.wait)),
+            timeout_seconds=int(
+                start_map.get("timeout_seconds", start.timeout_seconds)
+            ),
+        )
+    if stop_raw is not None:
+        stop_map = _require_mapping(stop_raw, "target_runtime.stop")
+        stop = RuntimeStopConfig(
+            policy=str(stop_map.get("policy", stop.policy)),
+            command=str(stop_map.get("command", stop.command)),
+            remove_volumes=bool(stop_map.get("remove_volumes", stop.remove_volumes)),
+        )
+    env_raw = mapping.get("env")
+    env: dict[str, str] = {}
+    if env_raw is not None:
+        env_mapping = _require_mapping(env_raw, "target_runtime.env")
+        env = {str(key): str(value) for key, value in env_mapping.items()}
+    compose_files = mapping.get("compose_files", ())
+    env_files = mapping.get("env_files", ())
+    profiles = mapping.get("profiles", ())
+    services = mapping.get("services", ())
+    return DockerComposeRuntimeConfig(
+        cwd=str(mapping.get("cwd", ".")),
+        project_name=(
+            str(mapping["project_name"]) if mapping.get("project_name") else None
+        ),
+        compose_files=tuple(str(item) for item in compose_files),
+        env_files=tuple(str(item) for item in env_files),
+        profiles=tuple(str(item) for item in profiles),
+        services=tuple(str(item) for item in services),
+        env=env,
+        start=start,
+        stop=stop,
+        health_checks=_parse_runtime_health_checks(mapping.get("health_checks")),
+    )
+
+
+def _parse_target_runtime(data: object) -> TargetRuntimeConfig:
+    if data is None:
+        return TargetRuntimeConfig()
+    mapping = _require_mapping(data, "target_runtime")
+    backend = str(mapping.get("backend", "none"))
+    docker_raw = mapping
+    if mapping.get("compose_files") is None and mapping.get("docker_compose"):
+        docker_raw = mapping.get("docker_compose")
+    elif backend == "docker_compose" and mapping.get("compose_files") is not None:
+        docker_raw = mapping
+    elif backend == "docker_compose":
+        docker_raw = mapping
+    else:
+        docker_raw = mapping.get("docker_compose")
+    docker_compose = None
+    if backend == "docker_compose":
+        docker_compose = _parse_docker_compose_runtime(docker_raw)
+    return TargetRuntimeConfig(backend=backend, docker_compose=docker_compose)
+
+
 def _parse_project_config(data: Mapping[str, object]) -> ProjectConfig:
     project_raw = data.get("project")
     project_id = ""
@@ -473,6 +582,7 @@ def _parse_project_config(data: Mapping[str, object]) -> ProjectConfig:
         full_verification=_parse_full_verification(data.get("full_verification")),
         playwright_mcp=_parse_playwright_mcp(data.get("playwright_mcp")),
         target=_parse_target_config(data.get("target")),
+        target_runtime=_parse_target_runtime(data.get("target_runtime")),
     )
 
 
@@ -570,6 +680,7 @@ def merge_config(
         full_verification=full_verification,
         playwright_mcp=project_config.playwright_mcp,
         target=project_config.target,
+        target_runtime=project_config.target_runtime,
         project_config_path=project_config_path,
         user_config_path=user_config_path,
     )

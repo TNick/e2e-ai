@@ -41,6 +41,7 @@ from ..runner import (
     run_attempt,
 )
 from ..runner.results import load_playwright_json
+from ..runtime.session import managed_target_runtime, runtime_env_for_playwright
 from .decisions import (
     classify_external_blocker,
     should_escalate_to_instrumentation,
@@ -142,12 +143,19 @@ class LoopSummary:
         return bool(self.reports) and not self.failed and not self.blocked
 
 
-def _isolation_context(config: EffectiveConfig) -> IsolationContext:
+def _isolation_context(
+    config: EffectiveConfig,
+    *,
+    extra_env: Mapping[str, str] | None = None,
+) -> IsolationContext:
+    env = {**os.environ}
+    if extra_env:
+        env.update({str(key): str(value) for key, value in extra_env.items()})
     return IsolationContext(
         project_root=config.project_root,
         state_dir=config.state_dir,
         config=config,
-        env={**os.environ},
+        env=env,
     )
 
 
@@ -196,13 +204,16 @@ def execute_attempt(
     run_id: str,
     isolation: IsolationBackend,
     attempt_id: str | None = None,
+    runtime_env: Mapping[str, str] | None = None,
 ) -> tuple[TestRunResult, FailureInfo | None, object]:
     """Create environment, run Playwright, and persist the result."""
 
     attempt_id = attempt_id or new_attempt_id(attempt_index)
-    context = _isolation_context(config)
+    context = _isolation_context(config, extra_env=runtime_env)
     lease = isolation.create_environment(context, test, attempt_id)
     workdir = _work_dir(config, test.id)
+    environment = dict(runtime_env or {})
+    environment.update(lease.env)
     request = TestRunRequest(
         run_id=run_id,
         test_id=test.id,
@@ -210,7 +221,7 @@ def execute_attempt(
         title=test.title,
         attempt_index=attempt_index,
         work_dir=workdir,
-        environment=dict(lease.env),
+        environment=environment,
         attempt_id=attempt_id,
         project_name=test.project_name,
         line=test.line,
@@ -533,6 +544,7 @@ def run_one_test_until_resolved(
     registry: AgentRegistry,
     reporter: Reporter | None = None,
     dry_run_agents: bool = False,
+    runtime_env: Mapping[str, str] | None = None,
 ) -> TestRepairState:
     """Run and repair one test until it passes or blocks."""
 
@@ -560,6 +572,7 @@ def run_one_test_until_resolved(
             attempt_index=attempt_index,
             run_id=run_id,
             isolation=isolation,
+            runtime_env=runtime_env,
         )
         repair_state.attempt_count += 1
         attempt_index += 1
@@ -688,6 +701,7 @@ def run_repair_loop(
     test_ids: list[str] | None = None,
     dry_run_agents: bool = False,
     stop_on_failure: bool = False,
+    start_runtime: bool = True,
 ) -> LoopSummary:
     """Run tests until green or blocked."""
 
@@ -714,31 +728,43 @@ def run_repair_loop(
     say(f"Scheduling {len(pending)} test(s).")
     context = _isolation_context(config)
 
-    try:
-        backend.prepare_baseline(context)
-        for test in pending:
-            state = run_one_test_until_resolved(
-                conn=conn,
-                config=config,
-                test=test,
-                run_id=run_id,
-                isolation=backend,
-                agents=plugins,
-                registry=registry,
-                reporter=say,
-                dry_run_agents=dry_run_agents,
-            )
-            summary.reports.append(_test_report_from_state(test, state))
+    def _runtime_outcome() -> str:
+        return "passed" if summary.all_green else "failed"
 
-            if state.state == STATE_EXTERNAL_BLOCKER:
-                if config.repair_policy.stop_on_first_unsolvable:
+    try:
+        with managed_target_runtime(
+            config,
+            run_id,
+            enabled=start_runtime,
+            outcome_fn=_runtime_outcome,
+        ) as runtime_state:
+            runtime_env = runtime_env_for_playwright(runtime_state)
+            context = _isolation_context(config, extra_env=runtime_env)
+            backend.prepare_baseline(context)
+            for test in pending:
+                state = run_one_test_until_resolved(
+                    conn=conn,
+                    config=config,
+                    test=test,
+                    run_id=run_id,
+                    isolation=backend,
+                    agents=plugins,
+                    registry=registry,
+                    reporter=say,
+                    dry_run_agents=dry_run_agents,
+                    runtime_env=runtime_env,
+                )
+                summary.reports.append(_test_report_from_state(test, state))
+
+                if state.state == STATE_EXTERNAL_BLOCKER:
+                    if config.repair_policy.stop_on_first_unsolvable:
+                        stopped = True
+                        stop_reason = state.note
+                        break
+                if stop_on_failure and state.state != STATE_PASSED:
                     stopped = True
-                    stop_reason = state.note
+                    stop_reason = "stop on failure"
                     break
-            if stop_on_failure and state.state != STATE_PASSED:
-                stopped = True
-                stop_reason = "stop on failure"
-                break
     finally:
         if stopped:
             status = "stopped"
@@ -803,6 +829,7 @@ class FixLoop:
         limit: int | None = None,
         test_ids: list[str] | None = None,
         stop_on_failure: bool = False,
+        start_runtime: bool = True,
     ) -> LoopSummary:
         return run_repair_loop(
             self.config,
@@ -814,6 +841,7 @@ class FixLoop:
             test_ids=test_ids,
             dry_run_agents=self.dry_run,
             stop_on_failure=stop_on_failure,
+            start_runtime=start_runtime,
         )
 
 

@@ -32,6 +32,15 @@ FR_TWO_YAML = textwrap.dedent(
       list_command: [pnpm, exec, playwright, test, --list]
       run_command: [pnpm, exec, playwright, test]
     exclude: {tests: ["tests/_diag-.*\\\\.spec\\\\.ts"]}
+    target_runtime:
+      backend: docker_compose
+      cwd: docker
+      compose_files: [compose.yml]
+      env_files: [env.docker]
+      health_checks:
+        - {name: backend, kind: http, url: http://127.0.0.1:8000/api/health}
+        - {name: frontend, kind: http, url: http://127.0.0.1:8080/}
+        - {name: postgres, kind: tcp, host: 127.0.0.1, port: 5432}
     isolation:
       backend: fr_two
       keep_on_failure: true
@@ -53,6 +62,10 @@ FR_TWO_YAML = textwrap.dedent(
 
 def _fr_two_config(tmp_path: Path):
     (tmp_path / "e2e").mkdir()
+    docker = tmp_path / "docker"
+    docker.mkdir()
+    (docker / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (docker / "env.docker").write_text("FOO=bar\n", encoding="utf-8")
     (tmp_path / "e2e-ai.yml").write_text(FR_TWO_YAML, encoding="utf-8")
     return load_effective_config(tmp_path)
 
@@ -91,6 +104,8 @@ class TestFrTwoConfig:
         assert cfg["isolation"]["storage"]["targets"]
         assert cfg["playwright"]["run_command"]
         assert cfg["full_verification"]["command"] == ["e2e-ai", "verify"]
+        assert cfg["target_runtime"]["backend"] == "docker_compose"
+        assert cfg["target_runtime"]["health_checks"]
         assert {"planner", "implementer", "instrumenter"} <= set(cfg["agents"])
 
 

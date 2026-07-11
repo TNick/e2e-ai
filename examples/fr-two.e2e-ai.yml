@@ -48,12 +48,54 @@ playwright:
   api_base_env: PLAYWRIGHT_API_BASE     # backend API URL for the leased slot
   lab_flag_env: E2E_LAB_COMPOSE         # flags the full lab compose stack
 
-# Diagnostic specs are kept in the tree but excluded from normal repair runs.
-# Exclude patterns are regular expressions (search) over the test's selector,
-# spec file, title, and id.
+# Diagnostic specs stay in the tree but are excluded from normal repair runs.
+# Exclude patterns are regular expressions (search) over selector/file/title/id.
 exclude:
   tests:
     - "tests/_diag-.*\\.spec\\.ts"
+
+# e2e-ai starts the Docker app stack before running tests. fr-two still owns
+# the compose files and service definitions; e2e-ai owns lifecycle orchestration.
+target_runtime:
+  backend: docker_compose
+  cwd: docker
+  project_name: fr-two-e2e
+  compose_files:
+    - compose.yml
+  env_files:
+    - env.docker
+  profiles:
+    - bundled-postgres
+    - seed-data
+    - map-cache
+    - http-cache
+  env:
+    COMPOSE_PROFILES: bundled-postgres,seed-data,map-cache,http-cache
+    FRTWO_MAP_CACHE_ENABLED: "true"
+    FRTWO_MAP_CACHE_URL: http://mapproxy:8080
+    FRTWO_RESI_QGIS_RENDER_ENABLED: "true"
+    E2E_LAB_COMPOSE: "1"
+  start:
+    detach: true
+    remove_orphans: true
+    wait: true
+    timeout_seconds: 240
+  health_checks:
+    - name: backend
+      kind: http
+      url: http://127.0.0.1:8000/api/health
+      timeout_seconds: 90
+    - name: frontend
+      kind: http
+      url: http://127.0.0.1:8080/
+      timeout_seconds: 90
+    - name: postgres
+      kind: tcp
+      host: 127.0.0.1
+      port: 5432
+      timeout_seconds: 90
+  stop:
+    policy: never
 
 # fr-two owns app-stack details; e2e-ai owns leases and reset orchestration.
 # The `fr_two` backend uses stable execution slots: the database name and user

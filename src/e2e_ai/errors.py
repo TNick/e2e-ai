@@ -30,3 +30,7 @@ class DockerError(E2eAiError):
 
 class CatalogError(E2eAiError):
     """Raised when the Playwright catalog cannot be built."""
+
+
+class TargetRuntimeError(E2eAiError):
+    """Raised when target support services fail to start or become ready."""

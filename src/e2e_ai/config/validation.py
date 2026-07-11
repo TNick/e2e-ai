@@ -8,7 +8,13 @@ from collections.abc import Sequence
 
 from ..errors import ConfigError
 from .models import CommandSpec, EffectiveConfig
-from .schema import BUILTIN_AGENT_PLUGINS, VALID_ISOLATION_BACKENDS
+from .schema import (
+    BUILTIN_AGENT_PLUGINS,
+    VALID_ISOLATION_BACKENDS,
+    VALID_RUNTIME_BACKENDS,
+    VALID_RUNTIME_HEALTH_CHECK_KINDS,
+    VALID_RUNTIME_STOP_POLICIES,
+)
 from .target import (
     VALID_TARGET_SCOPES,
     has_editable_backend,
@@ -99,6 +105,67 @@ def validate_target_config(config: EffectiveConfig) -> None:
             )
 
 
+def validate_target_runtime(config: EffectiveConfig) -> None:
+    """Validate target runtime configuration."""
+
+    runtime = config.target_runtime
+    if runtime.backend not in VALID_RUNTIME_BACKENDS:
+        raise ConfigError(
+            f"invalid target_runtime.backend {runtime.backend!r}; "
+            f"expected one of: {', '.join(sorted(VALID_RUNTIME_BACKENDS))}"
+        )
+    if runtime.backend == "none":
+        return
+    if runtime.backend == "docker_compose":
+        compose = runtime.docker_compose
+        if compose is None:
+            raise ConfigError(
+                "target_runtime.backend docker_compose requires compose settings"
+            )
+        if not compose.compose_files:
+            raise ConfigError(
+                "target_runtime.docker_compose.compose_files must not be empty"
+            )
+        if compose.start.timeout_seconds < 1:
+            raise ConfigError("target_runtime.start.timeout_seconds must be at least 1")
+        if compose.stop.policy not in VALID_RUNTIME_STOP_POLICIES:
+            allowed = ", ".join(sorted(VALID_RUNTIME_STOP_POLICIES))
+            raise ConfigError(f"target_runtime.stop.policy must be one of: {allowed}")
+        seen: set[str] = set()
+        for check in compose.health_checks:
+            if check.name in seen:
+                raise ConfigError(
+                    f"duplicate target_runtime health check name {check.name!r}"
+                )
+            seen.add(check.name)
+            if check.kind not in VALID_RUNTIME_HEALTH_CHECK_KINDS:
+                allowed = ", ".join(sorted(VALID_RUNTIME_HEALTH_CHECK_KINDS))
+                raise ConfigError(
+                    f"health check {check.name!r} kind must be one of: {allowed}"
+                )
+            if check.timeout_seconds < 1:
+                raise ConfigError(
+                    f"health check {check.name!r} timeout_seconds must be at least 1"
+                )
+            if check.kind == "http" and not check.url:
+                raise ConfigError(
+                    f"health check {check.name!r} requires url for http kind"
+                )
+            if check.kind == "tcp":
+                if not check.host:
+                    raise ConfigError(
+                        f"health check {check.name!r} requires host for tcp kind"
+                    )
+                if check.port is None:
+                    raise ConfigError(
+                        f"health check {check.name!r} requires port for tcp kind"
+                    )
+            if check.kind == "command" and not check.argv:
+                raise ConfigError(
+                    f"health check {check.name!r} requires argv for command kind"
+                )
+
+
 def validate_effective_config(config: EffectiveConfig) -> None:
     """Raise ConfigError when config is invalid."""
 
@@ -127,6 +194,12 @@ def validate_effective_config(config: EffectiveConfig) -> None:
 
     validate_exclude_patterns(config.exclude)
     validate_target_config(config)
+    validate_target_runtime(config)
+
+    if config.isolation.backend == "fr_two":
+        from ..integrations.fr_two.config import validate_fr_two_config
+
+        validate_fr_two_config(config)
 
     seen_ids: set[str] = set()
     for agent in config.agents:
