@@ -18,7 +18,6 @@ help:
 	@echo "  test               Run pytest"
 	@echo "  pre-commit         Run pre-commit on all files"
 	@echo "  pre-commit-install Install pre-commit and register the hook"
-	@echo "  pre-commit-run     Run pre-commit on all files"
 	@echo "  check              Run lint and test"
 
 init:
@@ -44,9 +43,7 @@ pre-commit-install:
 	$(PIP) install pre-commit
 	$(PRE_COMMIT) install
 
-pre-commit-run:
+pre-commit:
 	$(PRE_COMMIT) run --show-diff-on-failure --all-files
-
-pre-commit: pre-commit-run
 
 check: lint test

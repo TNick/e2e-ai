@@ -7,7 +7,6 @@ import re
 from collections.abc import Sequence
 
 from ..errors import ConfigError
-from ..mcp.policy import validate_playwright_mcp_policy
 from .models import CommandSpec, EffectiveConfig
 from .schema import BUILTIN_AGENT_PLUGINS, VALID_ISOLATION_BACKENDS
 from .target import (
@@ -148,6 +147,10 @@ def validate_effective_config(config: EffectiveConfig) -> None:
         )
     if config.repair_policy.max_agent_seconds < 1:
         raise ConfigError("repair_policy.max_agent_seconds must be at least 1")
+
+    # Imported lazily to avoid a config -> mcp -> analysis -> runner -> config
+    # import cycle at config-package import time.
+    from ..mcp.policy import validate_playwright_mcp_policy
 
     validate_playwright_mcp_policy(
         config.playwright_mcp,

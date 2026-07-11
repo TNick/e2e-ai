@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `e2e-ai verify` — the clean gate. Runs the full runnable suite once (no agents)
+  and passes only when all tests are green, or with `--report <file|dir>` parses
+  existing Playwright JSON reports (including sharded runs) and gates on them
+  (`--allow-skips` to tolerate skipped tests).
+- `e2e-ai cleanup` — drops isolation databases kept for debugging (via their
+  `cleanup-manifest.json` records), with `--dry-run` preview and
+  `--purge-artifacts` to also delete per-attempt work/run artifacts.
+
+- fr-two migration (branch `e2eai`): the fr-two Makefile E2E targets, the legacy
+  E2E scripts (`e2e_select`, `e2e_agent`, `e2e_agent_fix_loop`,
+  `e2e_parallel_db_pool`, `assert_e2e_run_clean`), and their backend tests now
+  route through `scripts/e2e_ai_bridge.py` / `e2e-ai`; the Playwright config and
+  `dockerDb` helper honor the e2e-ai slot/report env contract and report the
+  slot id + stable database name in connection errors.
+
+### Fixed
+
+- Broke a `config -> mcp -> analysis -> runner/agents -> config` import cycle by
+  making `e2e_ai.mcp` export its API lazily (PEP 562), so importing
+  `e2e_ai.config`/`e2e_ai.cli` no longer fails.
+
 - Project surface detection and agent edit scope: `target` config section with
   `frontend_only`, `full_stack`, and `frontend_with_backend_reference` scopes;
   layout heuristics in `e2e_ai.config.detect`; init scaffolding with

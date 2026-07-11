@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..config import EffectiveConfig
+from ..config.models import EffectiveConfig
 from ..errors import CatalogError
 from ..inventory.models import DiscoveredTest
 

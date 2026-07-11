@@ -5,16 +5,15 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import platformdirs
 import yaml
 
 from ..errors import ConfigError
-from ..mcp.models import (
-    McpOriginsConfig,
-    McpStorageStateConfig,
-    PlaywrightMcpConfig,
-)
+
+if TYPE_CHECKING:
+    from ..mcp.models import PlaywrightMcpConfig
 from .defaults import (
     DEFAULT_PROJECT_CONFIG,
     DEFAULT_USER_CONFIG,
@@ -286,6 +285,14 @@ def _parse_repair_policy(data: object) -> RepairPolicy:
 
 
 def _parse_playwright_mcp(data: object) -> PlaywrightMcpConfig:
+    # Imported lazily: importing ``mcp`` at module top forms a
+    # config -> mcp -> analysis -> runner -> config import cycle.
+    from ..mcp.models import (
+        McpOriginsConfig,
+        McpStorageStateConfig,
+        PlaywrightMcpConfig,
+    )
+
     if data is None:
         return PlaywrightMcpConfig()
     mapping = _require_mapping(data, "playwright_mcp")

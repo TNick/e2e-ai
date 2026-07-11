@@ -7,7 +7,7 @@ import secrets
 import time
 from pathlib import Path
 
-from ..config import EffectiveConfig
+from ..config.models import EffectiveConfig
 from ..errors import CatalogError
 from ..inventory.models import DiscoveredTest
 from ..models import FailureInfo

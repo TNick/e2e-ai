@@ -18,6 +18,10 @@ from .loader import (
     load_yaml_file,
     merge_config,
 )
+
+# Import the typed models FIRST so leaf modules (runner, isolation, …) that do
+# ``from ..config import EffectiveConfig`` resolve even while ``.defaults``
+# construction triggers the mcp/analysis/runner import graph.
 from .models import (
     AgentConfig,
     CommandSpec,

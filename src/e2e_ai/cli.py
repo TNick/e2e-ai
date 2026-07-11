@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import logging
 import os
 import sys
@@ -25,9 +26,11 @@ from .inventory.store import discover_inventory, ensure_state_layout
 from .isolation import (
     POSTGRES_BACKENDS,
     IsolationContext,
+    drop_database,
     ensure_template_database,
 )
 from .loop import FixLoop, TestResult, build_backend, default_reporter
+from .runner.results import load_playwright_json, summarize_playwright_json
 
 logger = logging.getLogger(__name__)
 
@@ -447,6 +450,114 @@ def build_cli() -> click.Group:
         template_db = config.isolation.postgres.template_db
         click.echo(f"Template database {template_db!r} is ready.")
 
+    # ── verify (clean gate) ──────────────────────────────────────────────────
+    @cli.command()
+    @_project_root_option
+    @click.option(
+        "--report",
+        "reports",
+        multiple=True,
+        type=click.Path(path_type=Path, exists=True),
+        help="Gate an existing Playwright JSON report (file or dir). Repeatable. "
+        "Accepts sharded runs. When omitted, the full suite is run once.",
+    )
+    @click.option(
+        "--allow-skips",
+        is_flag=True,
+        help="Do not fail the gate on skipped tests.",
+    )
+    @click.option(
+        "--rediscover/--no-rediscover",
+        default=True,
+        show_default=True,
+        help="Refresh the inventory before running (run mode only).",
+    )
+    @click.option(
+        "--limit", type=int, default=None, help="Only run the first N tests (run mode)."
+    )
+    def verify(
+        project_root: Path,
+        reports: tuple[Path, ...],
+        allow_skips: bool,
+        rediscover: bool,
+        limit: int | None,
+    ) -> None:
+        """Assert an E2E run is clean — the final gate.
+
+        With ``--report`` it parses existing Playwright JSON reports (including
+        sharded runs) and gates on them. Otherwise it runs the full runnable
+        suite once (no agents) and gates on the result.
+        """
+
+        # Report mode gates existing artifacts and needs no project config.
+        if reports:
+            clean = _gate_reports(list(reports), allow_skips=allow_skips)
+            raise SystemExit(0 if clean else 1)
+
+        config = _load(project_root)
+        if rediscover:
+            discover_inventory(config)
+        ensure_state_layout(config)
+        backend = _prepare_backend(config)
+        conn = ensure_database(database_path(config))
+        try:
+            loop = FixLoop(
+                config,
+                conn,
+                AgentRegistry.from_config(config),
+                backend=backend,
+                reporter=default_reporter,
+                dry_run=True,
+            )
+            loop.ensure_dirs()
+            summary = loop.run(limit=limit)
+        finally:
+            conn.close()
+        _print_summary(summary)
+        if summary.all_green:
+            click.echo("VERIFY: clean ✅")
+            raise SystemExit(0)
+        click.echo("VERIFY: not clean ❌")
+        raise SystemExit(1)
+
+    # ── cleanup ──────────────────────────────────────────────────────────────
+    @cli.command()
+    @_project_root_option
+    @click.option(
+        "--dry-run", is_flag=True, help="Show what would be removed without doing it."
+    )
+    @click.option(
+        "--purge-artifacts",
+        is_flag=True,
+        help="Also delete per-attempt work/run artifacts (destructive).",
+    )
+    def cleanup(
+        project_root: Path,
+        dry_run: bool,
+        purge_artifacts: bool,
+    ) -> None:
+        """Drop kept isolation databases and (optionally) purge artifacts.
+
+        Databases kept for debugging (``keep_on_failure`` / ``keep_on_success``)
+        record a ``cleanup-manifest.json`` under the state dir; this drops each
+        recorded database. Artifacts referenced by kept environments are removed
+        only with ``--purge-artifacts``.
+        """
+
+        config = _load(project_root)
+        dropped, failed = _cleanup_databases(config, dry_run=dry_run)
+        verb = "Would drop" if dry_run else "Dropped"
+        click.echo(f"{verb} {dropped} kept database(s).")
+        for name, reason in failed:
+            click.echo(f"  could not drop {name}: {reason}", err=True)
+
+        if purge_artifacts:
+            removed = _purge_artifacts(config, dry_run=dry_run)
+            verb = "Would remove" if dry_run else "Removed"
+            click.echo(f"{verb} {removed} artifact director(y/ies).")
+
+        raise SystemExit(0)
+
     return cli
 
 
@@ -471,6 +582,106 @@ def _prepare_backend(config: EffectiveConfig):
                 f"could not prepare isolation backend: {exc}"
             ) from exc
     return backend
+
+
+def _iter_report_files(paths: list[Path]) -> list[Path]:
+    """Expand report paths (files or directories) into JSON report files."""
+
+    files: list[Path] = []
+    for path in paths:
+        if path.is_dir():
+            files.extend(sorted(path.rglob("*.json")))
+        elif path.is_file():
+            files.append(path)
+    return files
+
+
+def _gate_reports(paths: list[Path], *, allow_skips: bool) -> bool:
+    """Parse Playwright report(s) and return whether the run is clean."""
+
+    files = _iter_report_files(paths)
+    if not files:
+        raise click.ClickException("no Playwright JSON reports found to verify")
+
+    totals = {"expected": 0, "unexpected": 0, "skipped": 0, "flaky": 0}
+    parsed = 0
+    for file in files:
+        data = load_playwright_json(file)
+        if not data or "stats" not in data:
+            continue  # not a Playwright report; skip quietly
+        parsed += 1
+        stats = summarize_playwright_json(data)
+        for key in totals:
+            totals[key] += int(stats.get(key, 0))
+
+    if parsed == 0:
+        raise click.ClickException("none of the given files are Playwright reports")
+
+    click.echo(
+        "VERIFY reports: {expected} passed, {unexpected} failed, "
+        "{flaky} flaky, {skipped} skipped "
+        "(across {n} report(s))".format(n=parsed, **totals)
+    )
+
+    clean = (
+        totals["unexpected"] == 0
+        and totals["flaky"] == 0
+        and totals["expected"] >= 1
+        and (allow_skips or totals["skipped"] == 0)
+    )
+    click.echo("VERIFY: clean ✅" if clean else "VERIFY: not clean ❌")
+    return clean
+
+
+def _cleanup_databases(
+    config: EffectiveConfig,
+    *,
+    dry_run: bool,
+) -> tuple[int, list[tuple[str, str]]]:
+    """Drop databases recorded in cleanup manifests under the state dir."""
+
+    dropped = 0
+    failed: list[tuple[str, str]] = []
+    context = _isolation_context(config)
+    for manifest_path in sorted(config.state_dir.rglob("cleanup-manifest.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            failed.append((str(manifest_path), str(exc)))
+            continue
+        database = manifest.get("database_name")
+        if not database:
+            manifest_path.unlink(missing_ok=True)
+            continue
+        if dry_run:
+            click.echo(f"  would drop {database}")
+            dropped += 1
+            continue
+        try:
+            drop_database(context, database)
+            dropped += 1
+            manifest_path.unlink(missing_ok=True)
+        except (DockerError, E2eAiError) as exc:
+            failed.append((database, str(exc)))
+    return dropped, failed
+
+
+def _purge_artifacts(config: EffectiveConfig, *, dry_run: bool) -> int:
+    """Remove per-attempt work/run artifact directories (destructive)."""
+
+    import shutil
+
+    removed = 0
+    for name in ("work", "runs"):
+        target = config.state_dir / name
+        if not target.is_dir():
+            continue
+        if dry_run:
+            click.echo(f"  would remove {target}")
+        else:
+            shutil.rmtree(target, ignore_errors=True)
+        removed += 1
+    return removed
 
 
 def _print_summary(summary) -> None:  # type: ignore[no-untyped-def]
