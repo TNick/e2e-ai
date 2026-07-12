@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-12
+
+### Changed
+
+- install monitor optional deps in ci
+
 ## [0.1.1] - 2026-07-12
 
 ### Added
@@ -75,4 +81,5 @@ All notable changes to this project will be documented in this file.
 - `tests/mcp_test.py` and MCP client-config fixtures under `tests/fixtures/mcp/`.
 
 [0.1.1]: https://github.com/TNick/e2e-ai/compare/0816d060c8d69ee8f8a0b9fd374f6ac9a8248212...v0.1.1
-[unreleased]: https://github.com/TNick/e2e-ai/compare/v0.1.1...HEAD
+[0.1.2]: https://github.com/TNick/e2e-ai/compare/v0.1.1...v0.1.2
+[unreleased]: https://github.com/TNick/e2e-ai/compare/v0.1.2...HEAD
