@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "e2e-ai"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-driven loop that runs Playwright e2e tests and fixes failures until green"
 readme = "README.md"
 requires-python = ">=3.11"
