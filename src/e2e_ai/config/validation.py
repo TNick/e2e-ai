@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from ..errors import ConfigError
 from .models import CommandSpec, EffectiveConfig
 from .schema import (
+    AGENT_ROLES,
     BUILTIN_AGENT_PLUGINS,
     VALID_ISOLATION_BACKENDS,
     VALID_RUNTIME_BACKENDS,
@@ -220,10 +221,35 @@ def validate_effective_config(config: EffectiveConfig) -> None:
         validate_fr_two_config(config)
 
     seen_ids: set[str] = set()
+    disabled_plugins: set[str] = set()
+    variant_ids: set[str] = set()
+    for agent in config.agents:
+        if agent.provider is not None:
+            variant_ids.add(agent.id)
+    routable_ids: set[str] = set(BUILTIN_AGENT_PLUGINS) | variant_ids
     for agent in config.agents:
         if agent.id in seen_ids:
             raise ConfigError(f"duplicate agent id {agent.id!r}")
         seen_ids.add(agent.id)
+        if agent.plugin is not None and agent.id in AGENT_ROLES:
+            if agent.plugin not in routable_ids:
+                raise ConfigError(
+                    f"unknown agent plugin {agent.plugin!r} for {agent.id!r}; "
+                    f"expected one of: {', '.join(sorted(routable_ids))}"
+                )
+            continue
+        if agent.provider is not None:
+            if agent.provider not in BUILTIN_AGENT_PLUGINS:
+                raise ConfigError(
+                    f"unknown agent provider {agent.provider!r} for "
+                    f"{agent.id!r}; expected one of: "
+                    f"{', '.join(sorted(BUILTIN_AGENT_PLUGINS))}"
+                )
+            continue
+        if agent.id in BUILTIN_AGENT_PLUGINS:
+            if not agent.enabled:
+                disabled_plugins.add(agent.id)
+            continue
         if (
             agent.plugin is not None
             and agent.plugin not in BUILTIN_AGENT_PLUGINS
@@ -286,11 +312,16 @@ def validate_effective_config(config: EffectiveConfig) -> None:
         ("instrumenter", role_prefs.instrumenter),
     ):
         for provider in providers:
-            if provider not in BUILTIN_AGENT_PLUGINS:
+            if provider in disabled_plugins:
+                raise ConfigError(
+                    f"routing.role_preferences.{role} references disabled "
+                    f"provider {provider!r}"
+                )
+            if provider not in routable_ids:
                 raise ConfigError(
                     f"routing.role_preferences.{role} references unknown "
                     f"provider {provider!r}; expected one of: "
-                    f"{', '.join(sorted(BUILTIN_AGENT_PLUGINS))}"
+                    f"{', '.join(sorted(routable_ids))}"
                 )
 
     logger.log(

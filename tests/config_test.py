@@ -23,7 +23,11 @@ from e2e_ai.config import (
 from e2e_ai.config.defaults import DEFAULT_USER_CONFIG
 from e2e_ai.config.detect import detect_target_layout
 from e2e_ai.config.loader import _parse_project_config, _parse_user_config
-from e2e_ai.config.models import TargetConfig, TargetSurfaceConfig
+from e2e_ai.config.models import (
+    RolePreferencesConfig,
+    TargetConfig,
+    TargetSurfaceConfig,
+)
 from e2e_ai.config.scaffold import (
     build_scaffold_from_detection,
     render_project_config_yaml,
@@ -80,8 +84,10 @@ class TestConfigLoader:
         planner = next(
             agent for agent in effective.agents if agent.id == "planner"
         )
-        assert planner.plugin == "codex"
+        assert planner.plugin == "cursor_auto"
         assert planner.profile == "difficult"
+        prefs = effective.routing.role_preferences
+        assert prefs.planner[0] == "cursor_auto"
 
     def test_agent_lists_merge_by_id(self) -> None:
         user = UserConfig(
@@ -186,6 +192,83 @@ playwright:
         assert project.playwright.cwd == "e2e"
         assert project.target.scope == "full_stack"
         assert project.target.surfaces["backend"].path == "backend"
+        assert project.routing is not None
+        assert project.routing.role_preferences.planner[0] == "cursor_auto"
+
+    def test_project_routing_overrides_user_role_preferences(self) -> None:
+        user = UserConfig(
+            agents=DEFAULT_USER_CONFIG.agents,
+            routing=RoutingConfig(
+                role_preferences=RolePreferencesConfig(
+                    planner=("codex", "claude"),
+                    implementer=("claude", "codex", "cursor"),
+                ),
+            ),
+        )
+        project = ProjectConfig(
+            routing=RoutingConfig(
+                role_preferences=RolePreferencesConfig(
+                    planner=("cursor_auto", "cursor_gpt"),
+                ),
+            ),
+        )
+        effective = merge_config(user, project, project_root=Path("/tmp/demo"))
+        assert effective.routing.role_preferences.planner == (
+            "cursor_auto",
+            "cursor_gpt",
+        )
+        assert effective.routing.role_preferences.implementer == (
+            "claude",
+            "codex",
+            "cursor",
+        )
+
+    def test_parse_agent_variant_fields(self) -> None:
+        project = _parse_project_config(
+            {
+                "project": {"id": "demo"},
+                "agents": {
+                    "cursor_gpt": {
+                        "provider": "cursor",
+                        "model_candidates": ["gpt-5.6-sol"],
+                    },
+                },
+            }
+        )
+        variant = next(
+            agent for agent in project.agents if agent.id == "cursor_gpt"
+        )
+        assert variant.provider == "cursor"
+        assert variant.model_candidates == ("gpt-5.6-sol",)
+
+    def test_parse_agent_max_turns(self) -> None:
+        project = _parse_project_config(
+            {
+                "project": {"id": "demo"},
+                "agents": {
+                    "claude": {
+                        "provider": "claude",
+                        "max_turns": 15,
+                    },
+                },
+            }
+        )
+        claude = next(agent for agent in project.agents if agent.id == "claude")
+        assert claude.max_turns == 15
+
+    def test_merge_agent_max_turns(self) -> None:
+        user = UserConfig(
+            agents=(AgentConfig(id="claude", provider="claude", max_turns=10),),
+            routing=RoutingConfig(),
+        )
+        project = ProjectConfig(
+            agents=(AgentConfig(id="claude", provider="claude", max_turns=15),),
+        )
+        effective = merge_config(user, project, project_root=Path("/tmp/demo"))
+        claude = next(
+            agent for agent in effective.agents if agent.id == "claude"
+        )
+        assert claude.max_turns == 15
 
 
 class TestTargetConfig:

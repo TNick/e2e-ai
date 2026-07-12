@@ -88,6 +88,7 @@
   .codex-field ul { margin: 4px 0 0 18px; padding: 0; }
   .codex-field li { margin: 2px 0; }
   .codex-msg { white-space: pre-wrap; word-break: break-word; }
+  .cursor-think { color: var(--muted); font-style: italic; }
 </style>
 </head>
 <body>
@@ -151,7 +152,7 @@ function isCodexJsonl(text) {
   return hits >= 2;
 }
 
-function parseCodexStream(text) {
+function parseJsonlStream(text) {
   const preamble = [];
   const events = [];
   for (const raw of String(text || "").split(/\r?\n/)) {
@@ -168,6 +169,276 @@ function parseCodexStream(text) {
     }
   }
   return { preamble, events };
+}
+
+function parseCodexStream(text) {
+  return parseJsonlStream(text);
+}
+
+// Detect Cursor Agent CLI ``--output-format stream-json`` logs.
+function isCursorStreamJsonl(text) {
+  const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return false;
+  let hits = 0;
+  for (const line of lines) {
+    if (!line.startsWith("{")) continue;
+    try {
+      const obj = JSON.parse(line);
+      const t = obj && obj.type;
+      if (t === "tool_call" || t === "thinking") hits += 2;
+      else if (t === "system" && obj.subtype === "init") hits++;
+      else if (t === "assistant" || t === "result" || t === "interaction_query") hits++;
+    } catch { /* not JSON */ }
+  }
+  return hits >= 2;
+}
+
+function resolveAgentLogFormat(text, agentId) {
+  const raw = String(text || "");
+  if (!raw.trim()) return null;
+  if (agentId === "codex" || isCodexJsonl(raw)) return "codex";
+  const id = String(agentId || "");
+  if (isCursorStreamJsonl(raw) || (/^cursor/i.test(id) && parseJsonlStream(raw).events.length)) {
+    return "cursor";
+  }
+  return null;
+}
+
+function extractCursorMessageText(message) {
+  if (!message || typeof message !== "object") return "";
+  const content = message.content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => part && part.type === "text" && part.text)
+    .map((part) => part.text)
+    .join("");
+}
+
+function cursorToolCallEntry(toolCall) {
+  if (!toolCall || typeof toolCall !== "object") return null;
+  const keys = Object.keys(toolCall);
+  if (!keys.length) return null;
+  const name = keys[0];
+  return [name, toolCall[name] || {}];
+}
+
+function cursorToolCallTitle(toolCall) {
+  const entry = cursorToolCallEntry(toolCall);
+  if (!entry) return "tool";
+  const [name, payload] = entry;
+  const args = payload.args || {};
+  if (name === "readToolCall") {
+    const path = args.path || "—";
+    const range = args.offset != null ? ` @${args.offset}` : "";
+    return `Read ${path}${range}`;
+  }
+  if (name === "grepToolCall") {
+    return `Grep ${args.pattern || "—"} in ${args.path || "—"}`;
+  }
+  if (name === "createPlanToolCall") {
+    return `Plan: ${args.name || args.overview || "create plan"}`;
+  }
+  return name.replace(/ToolCall$/, "");
+}
+
+function renderCursorCollapsiblePre(label, text, openThreshold) {
+  const norm = normalizeDisplayText(text);
+  if (!norm) return "";
+  const open = norm.length < (openThreshold || 2400) ? " open" : "";
+  return `<details class="codex-out"${open}><summary>${esc(label)}</summary>`
+    + `<pre>${esc(norm)}</pre></details>`;
+}
+
+function renderCursorToolCallBody(toolCall, completedEv) {
+  const entry = cursorToolCallEntry(toolCall);
+  if (!entry) return '<div class="muted">(no tool details)</div>';
+  const [name, startedPayload] = entry;
+  const completedPayload = completedEv && cursorToolCallEntry(completedEv.tool_call);
+  const result = completedPayload && completedPayload[0] === name
+    ? completedPayload[1].result
+    : null;
+
+  if (name === "readToolCall") {
+    const success = result && result.success;
+    const content = success && success.content;
+    if (content) {
+      const label = `Content (${String(content).length.toLocaleString()} chars`
+        + `${success.totalLines != null ? `, ${success.totalLines} lines` : ""})`;
+      return renderCursorCollapsiblePre(label, content, 1200);
+    }
+    const path = (startedPayload.args || {}).path;
+    return path ? `<div class="codex-cmd">${esc(path)}</div>` : '<div class="muted">Reading…</div>';
+  }
+
+  if (name === "grepToolCall") {
+    const args = startedPayload.args || {};
+    let body = `<div class="codex-cmd">${esc(args.pattern || "—")} · ${esc(args.path || "—")}</div>`;
+    const matches = result && result.success
+      && result.success.workspaceResults;
+    if (matches && typeof matches === "object") {
+      const lines = [];
+      for (const ws of Object.values(matches)) {
+        const content = ws && ws.content;
+        if (!content || !Array.isArray(content.matches)) continue;
+        for (const match of content.matches.slice(0, 12)) {
+          const file = match.file || "—";
+          const hit = (match.matches || [])[0];
+          const lineNo = hit && hit.lineNumber != null ? hit.lineNumber : "?";
+          lines.push(`${file}:${lineNo}`);
+        }
+      }
+      if (lines.length) {
+        body += `<ul>${lines.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>`;
+      }
+    }
+    return body;
+  }
+
+  if (name === "createPlanToolCall") {
+    const args = startedPayload.args || {};
+    const plan = args.plan || "";
+    let body = "";
+    if (args.overview) body += `<div class="codex-msg">${esc(normalizeDisplayText(args.overview))}</div>`;
+    if (plan) {
+      body += renderCursorCollapsiblePre(
+        `Plan (${String(plan).length.toLocaleString()} chars)`,
+        plan,
+        1800,
+      );
+    }
+    return body || '<div class="muted">(empty plan)</div>';
+  }
+
+  const dump = normalizeDisplayText(JSON.stringify(startedPayload.args || {}, null, 2));
+  return dump ? `<pre>${esc(dump)}</pre>` : '<div class="muted">(no args)</div>';
+}
+
+function renderCursorToolCallCard(rec) {
+  const evs = rec.evs || [];
+  const started = evs.find((ev) => ev.subtype === "started");
+  const completed = evs.find((ev) => ev.subtype === "completed");
+  const toolCall = (started || completed || {}).tool_call || {};
+  const title = cursorToolCallTitle(toolCall);
+  const status = completed ? "completed" : started ? "in_progress" : "pending";
+  const statusCls = status === "completed" ? "s-ok" : status === "in_progress" ? "s-running" : "muted";
+  return `<div class="card codex-item">
+    <div class="codex-item-head">
+      <span class="pill">tool</span>
+      <span class="id">${esc(title)}</span>
+      <span class="pill ${statusCls}">${esc(status)}</span>
+    </div>
+    ${renderCursorToolCallBody(toolCall, completed)}
+  </div>`;
+}
+
+function buildCursorDisplayUnits(events) {
+  const units = [];
+  const toolCallsById = new Map();
+  let thinkingBuf = [];
+
+  function flushThinking() {
+    const text = thinkingBuf.join("");
+    thinkingBuf = [];
+    if (text.trim()) units.push({ kind: "thinking", text });
+  }
+
+  for (const ev of events) {
+    const t = ev && ev.type;
+    const st = ev.subtype;
+
+    if (t === "thinking") {
+      if (st === "delta") thinkingBuf.push(ev.text || "");
+      else if (st === "completed") flushThinking();
+      continue;
+    }
+
+    if (t === "tool_call") {
+      flushThinking();
+      const id = ev.call_id || ev.toolCallId || `tc-${toolCallsById.size}`;
+      if (!toolCallsById.has(id)) {
+        toolCallsById.set(id, { id, evs: [] });
+        units.push({ kind: "tool_call", id });
+      }
+      toolCallsById.get(id).evs.push(ev);
+      continue;
+    }
+
+    if (t === "interaction_query") {
+      if (st === "request" && ev.query && ev.query.createPlanRequestQuery) {
+        units.push({ kind: "meta", text: "Create plan request" });
+      }
+      continue;
+    }
+
+    flushThinking();
+    if (t === "system" || t === "user" || t === "assistant" || t === "result") {
+      units.push({ kind: t, ev });
+    }
+  }
+  flushThinking();
+  return { units, toolCallsById };
+}
+
+function renderCursorLog(text) {
+  const { preamble, events } = parseJsonlStream(text);
+  if (!events.length) return `<pre>${esc(normalizeDisplayText(text))}</pre>`;
+  const { units, toolCallsById } = buildCursorDisplayUnits(events);
+  const parts = ['<div class="codex-log">'];
+  if (preamble.length) {
+    parts.push(`<div class="codex-preamble">${esc(normalizeDisplayText(preamble.join("\n")))}</div>`);
+  }
+  for (const unit of units) {
+    if (unit.kind === "meta") {
+      parts.push(`<div class="codex-meta">${esc(unit.text)}</div>`);
+      continue;
+    }
+    if (unit.kind === "thinking") {
+      const norm = normalizeDisplayText(unit.text);
+      parts.push(`<div class="card codex-item"><details class="codex-out">`
+        + `<summary>${esc(`Thinking (${norm.length.toLocaleString()} chars)`)}</summary>`
+        + `<pre class="cursor-think">${esc(norm)}</pre></details></div>`);
+      continue;
+    }
+    if (unit.kind === "tool_call") {
+      parts.push(renderCursorToolCallCard(toolCallsById.get(unit.id) || { evs: [] }));
+      continue;
+    }
+    const ev = unit.ev || {};
+    if (unit.kind === "system" && ev.subtype === "init") {
+      parts.push(`<div class="codex-meta">Session · ${esc(ev.model || "?")} · ${esc(ev.cwd || "—")}</div>`);
+      continue;
+    }
+    if (unit.kind === "user") {
+      const msg = normalizeDisplayText(extractCursorMessageText(ev.message));
+      parts.push(`<div class="card codex-item"><div class="codex-item-head"><span class="pill">user</span></div>`
+        + renderCursorCollapsiblePre(`Prompt (${msg.length.toLocaleString()} chars)`, msg, 0)
+        + `</div>`);
+      continue;
+    }
+    if (unit.kind === "assistant") {
+      const msg = normalizeDisplayText(extractCursorMessageText(ev.message));
+      parts.push(`<div class="card codex-item"><div class="codex-item-head"><span class="pill">assistant</span></div>`
+        + (msg ? `<div class="codex-msg">${esc(msg)}</div>` : '<div class="muted">(empty)</div>')
+        + `</div>`);
+      continue;
+    }
+    if (unit.kind === "result") {
+      const msg = normalizeDisplayText(ev.result || "");
+      const usage = ev.usage && typeof ev.usage === "object" ? ev.usage : null;
+      const usageTxt = usage
+        ? ` · in/out ${usage.inputTokens ?? "—"}/${usage.outputTokens ?? "—"}`
+        : "";
+      const okCls = ev.is_error ? "s-failed" : "s-ok";
+      parts.push(`<div class="card codex-item"><div class="codex-item-head">`
+        + `<span class="pill">result</span><span class="pill ${okCls}">${esc(ev.subtype || "—")}</span>`
+        + `<span class="muted">${esc(usageTxt)}</span></div>`
+        + (msg ? `<div class="codex-msg">${esc(msg)}</div>` : "")
+        + `</div>`);
+      continue;
+    }
+  }
+  parts.push("</div>");
+  return parts.join("");
 }
 
 function codexItemRecords(events) {
@@ -308,7 +579,9 @@ function renderCodexLog(text) {
 function renderAgentLog(text, agentId) {
   const raw = String(text || "");
   if (!raw.trim()) return "";
-  if (agentId === "codex" || isCodexJsonl(raw)) return renderCodexLog(raw);
+  const fmt = resolveAgentLogFormat(raw, agentId);
+  if (fmt === "codex") return renderCodexLog(raw);
+  if (fmt === "cursor") return renderCursorLog(raw);
   return `<pre>${esc(normalizeDisplayText(raw))}</pre>`;
 }
 

@@ -769,6 +769,7 @@ def handle_failed_attempt(
         conn,
         test.id,
         packet.signature,
+        run_id=run_id,
         max_same_signature=policy.max_same_signature_attempts,
     )
 

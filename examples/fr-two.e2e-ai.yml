@@ -141,15 +141,57 @@ full_verification:
     - e2e-ai
     - verify
 
-# Role -> agent plugin (+ profile). A stronger planner/instrumenter with a
-# cheaper implementer keeps token spend modest while planning stays capable.
+# Cursor-first repair routing with runtime model resolution for variants.
+routing:
+  role_preferences:
+    planner:
+      - cursor_auto
+      - cursor_gpt
+      - claude_recommended
+      - codex_recommended
+    implementer:
+      - cursor_auto
+      - cursor_composer
+      - claude_recommended
+      - codex_recommended
+    instrumenter:
+      - cursor_auto
+      - cursor_gpt
+      - claude_recommended
+      - codex_recommended
+
+# Role profiles plus provider variants (Cursor Auto, GPT, Composer, etc.).
 agents:
   planner:
-    plugin: codex
+    plugin: cursor_auto
     profile: difficult
   implementer:
-    plugin: claude
-    profile: normal
+    plugin: cursor_auto
+    profile: cheap
   instrumenter:
-    plugin: cursor
+    plugin: cursor_auto
     profile: difficult
+  cursor_auto:
+    provider: cursor
+  cursor_gpt:
+    provider: cursor
+    model_candidates:
+      - gpt-5.6-sol
+      - gpt-5.6-terra
+      - gpt-5.5
+  cursor_composer:
+    provider: cursor
+    model_candidates:
+      - composer-2.5
+  claude_recommended:
+    provider: claude
+    model_candidates:
+      - claude-sonnet-5
+      - claude-opus-4.8
+      - sonnet
+  codex_recommended:
+    provider: codex
+    model_candidates:
+      - gpt-5.6-sol
+      - gpt-5.6-terra
+    reasoning_effort: high

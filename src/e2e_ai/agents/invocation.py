@@ -16,6 +16,7 @@ EXIT_MODEL_UNAVAILABLE = "model_unavailable"
 EXIT_TRANSIENT_CAPACITY = "transient_capacity"
 EXIT_MISCONFIGURED = "misconfigured"
 EXIT_SCHEMA_FAILURE = "schema_failure"
+EXIT_MAX_TURNS_EXCEEDED = "max_turns_exceeded"
 EXIT_PERMISSION_DENIED = "permission_denied"
 EXIT_TASK_FAILURE = "task_failure"
 EXIT_TIMEOUT = "timeout"
@@ -28,11 +29,11 @@ _AUTH_PATTERNS = (
     re.compile(r"auth\s+status.*fail", re.I),
 )
 _QUOTA_PATTERNS = (
-    re.compile(r"rate\s*limit", re.I),
+    re.compile(r"\brate\s*limit\b", re.I),
     re.compile(r"quota\s+exhaust", re.I),
     re.compile(r"usage\s+limit", re.I),
     re.compile(r"too\s+many\s+requests", re.I),
-    re.compile(r"429"),
+    re.compile(r"\b429\b"),
 )
 _MODEL_PATTERNS = (
     re.compile(r"model\s+not\s+found", re.I),
@@ -42,9 +43,15 @@ _MODEL_PATTERNS = (
 _TRANSIENT_PATTERNS = (
     re.compile(r"overloaded", re.I),
     re.compile(r"temporarily\s+unavailable", re.I),
-    re.compile(r"503"),
-    re.compile(r"502"),
+    re.compile(r"\b503\b"),
+    re.compile(r"\b502\b"),
 )
+_PERMISSION_PATTERNS = (
+    re.compile(r"workspace\s+trust", re.I),
+    re.compile(r"trust\s+this\s+directory", re.I),
+    re.compile(r"permission\s+denied", re.I),
+)
+_MAX_TURNS_PATTERN = re.compile(r'"subtype"\s*:\s*"error_max_turns"', re.I)
 _CONFIG_PATTERNS = (
     re.compile(r"unknown\s+option", re.I),
     re.compile(r"unrecognized\s+flag", re.I),
@@ -116,9 +123,14 @@ def classify_agent_exit(
         return EXIT_TIMEOUT
     if exit_code != 0:
         text = "\n".join((stdout, stderr))
+        if _MAX_TURNS_PATTERN.search(text):
+            return EXIT_MAX_TURNS_EXCEEDED
         for pattern in _AUTH_PATTERNS:
             if pattern.search(text):
                 return EXIT_AUTH_ERROR
+        for pattern in _PERMISSION_PATTERNS:
+            if pattern.search(text):
+                return EXIT_PERMISSION_DENIED
         for pattern in _QUOTA_PATTERNS:
             if pattern.search(text):
                 return EXIT_QUOTA_ERROR

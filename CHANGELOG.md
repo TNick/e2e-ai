@@ -28,9 +28,23 @@ All notable changes to this project will be documented in this file.
   (`routing.role_preferences`), automatic rotation to the next configured
   provider on retryable agent failures, per-invocation failover metadata in the
   state database and monitor UI, and `routing.failover` policy controls.
+- Agent provider variants: configure multiple routable ids for one CLI via
+  `provider` plus optional `model_candidates` / `reasoning_effort`. Variants
+  resolve models from each CLI catalog at runtime and are skipped when no
+  candidate is available.
+- Project-level `routing.role_preferences` overrides in `e2e-ai.yml` so a
+  target repository can define its own Cursor-first or other failover order.
+- Agent plugin entries support optional `max_turns` to override Claude CLI
+  turn budgets per variant or plugin definition.
+- Opt-in live agent contract tests (`tests/live_agents_test.py`) gated by
+  `E2E_AI_LIVE_AGENT_TESTS` invoke real Codex, Claude, and Cursor CLIs through
+  the production plugin path.
 
 ### Changed
 
+- Instrumentation escalation now counts only repair plans and repeated failure
+  signatures from the current run; a new run always gets a plan-and-implement
+  cycle before the instrumenter is invoked, even when prior runs left history.
 - Ruff line length aligned to the project standard (80 columns); `make delint`
   and pre-commit now reformat code to that width instead of the previous
   88-column default. Remaining overlong docstrings, SQL, and string literals
@@ -38,17 +52,32 @@ All notable changes to this project will be documented in this file.
 - Monitor agent detail drawer formats Codex ``--json`` stdout as one card per
   item, expands ``\\r\\n`` / ``\\n`` in command output, pretty-prints nested
   planner JSON, and collapses long ``aggregated_output`` blocks.
+- Monitor agent detail drawer formats Cursor ``stream-json`` stdout the same
+  way: merged thinking blocks, one card per tool call (read/grep/plan with
+  collapsible output), collapsed user prompts, and session/result metadata.
 - Repair loop prints prior attempt history as ``(N runs, M failures)`` when a
   test has been executed before (replacing the misleading ``(regression)`` /
   ``(seen before)`` labels).
 - The repair loop prints `Starting Docker containers...` after scheduling when
   Docker Compose startup is required, so long container bootstraps are easier
   to understand.
-- fr-two example config assigns planner to Codex, implementer to Claude, and
-  instrumenter to Cursor so local runs exercise all three providers.
+- fr-two example config uses Cursor-first per-role failover
+  (`cursor_auto` → model-specific Cursor variants → Claude → Codex) with
+  runtime model resolution for GPT and Composer variants.
 
 ### Fixed
 
+- Agent exit classification no longer treats Claude's benign
+  `rate_limit_event` metadata as `quota_error` (word-boundary quota patterns).
+- Claude `error_max_turns` responses are classified as `max_turns_exceeded`
+  instead of `quota_error` or generic `task_failure`.
+- Cursor workspace-trust prompts are classified as `permission_denied` and
+  Cursor planner/instrumenter/implementer argv now always pass `--trust`
+  (implementer also passes `--force`).
+- Claude planner and instrumenter default turn budgets are raised (20 / 14) so
+  investigation-heavy repair prompts are less likely to hit `error_max_turns`.
+- Agent plugin model resolution no longer leaves a sentinel ``object()`` in
+  argv when no ``model_candidates`` are configured.
 - Successful agent invocations no longer show a misleading failover exit class
   (for example `quota_error`) when agent logs mention rate limits or usage caps
   but the process exited cleanly with status `ok`.

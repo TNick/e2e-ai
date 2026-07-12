@@ -64,13 +64,17 @@ class PlaywrightConfig:
 
 @define
 class AgentConfig:
-    """One configured agent plugin or role assignment."""
+    """One configured agent plugin, variant, or role assignment."""
 
     id: str = field()
     plugin: str | None = field(default=None)
+    provider: str | None = field(default=None)
     profile: str | None = field(default=None)
     enabled: bool = field(default=True)
     executable: str | None = field(default=None)
+    model_candidates: tuple[str, ...] = field(factory=tuple)
+    reasoning_effort: str | None = field(default=None)
+    max_turns: int | None = field(default=None)
 
 
 @define
@@ -277,6 +281,7 @@ class ProjectConfig:
     state_dir: str = field(default=".e2e-ai")
     playwright: PlaywrightConfig = field(factory=PlaywrightConfig)
     agents: tuple[AgentConfig, ...] = field(factory=tuple)
+    routing: RoutingConfig | None = field(default=None)
     isolation: IsolationConfig = field(factory=IsolationConfig)
     exclude: tuple[str, ...] = field(factory=tuple)
     repair_policy: RepairPolicy = field(factory=RepairPolicy)

@@ -1,0 +1,2 @@
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1783872000,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false},"uuid":"da1d9217-8b69-4083-9bc7-46a8e2417afc","session_id":"f2840450-6043-43a5-8eb8-da273bda1265"}
+{"type":"result","subtype":"error_max_turns","duration_ms":73229,"duration_api_ms":73078,"is_error":true,"num_turns":7,"stop_reason":"tool_use","session_id":"f2840450-6043-43a5-8eb8-da273bda1265"}

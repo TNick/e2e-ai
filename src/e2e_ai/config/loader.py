@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import platformdirs
 import yaml
+from attrs import evolve
 
 from ..errors import ConfigError
 
@@ -177,15 +178,33 @@ def _parse_agent_entry(agent_id: str, data: object) -> AgentConfig:
         return AgentConfig(id=agent_id, plugin=data)
     mapping = _require_mapping(data, f"agents.{agent_id}")
     plugin = mapping.get("plugin")
+    provider = mapping.get("provider")
     profile = mapping.get("profile")
     enabled = mapping.get("enabled", True)
     executable = mapping.get("executable")
+    reasoning = mapping.get("reasoning_effort")
+    max_turns_raw = mapping.get("max_turns")
+    max_turns: int | None = None
+    if max_turns_raw is not None:
+        max_turns = int(max_turns_raw)
+    candidates_raw = mapping.get("model_candidates")
+    model_candidates: tuple[str, ...] = ()
+    if candidates_raw is not None:
+        if not isinstance(candidates_raw, list):
+            raise ConfigError(
+                f"agents.{agent_id}.model_candidates must be a list"
+            )
+        model_candidates = tuple(str(item) for item in candidates_raw)
     return AgentConfig(
         id=agent_id,
         plugin=str(plugin) if plugin is not None else None,
+        provider=str(provider) if provider is not None else None,
         profile=str(profile) if profile is not None else None,
         enabled=bool(enabled),
         executable=str(executable) if executable is not None else None,
+        model_candidates=model_candidates,
+        reasoning_effort=str(reasoning) if reasoning is not None else None,
+        max_turns=max_turns,
     )
 
 
@@ -651,11 +670,17 @@ def _parse_project_config(data: Mapping[str, object]) -> ProjectConfig:
         state_mapping = _require_mapping(state_raw, "state")
         state_dir = str(state_mapping.get("dir", state_dir))
 
+    routing = None
+    routing_raw = data.get("routing")
+    if routing_raw is not None:
+        routing = _parse_routing_config(routing_raw)
+
     return ProjectConfig(
         project_id=project_id,
         state_dir=state_dir,
         playwright=_parse_playwright_config(data.get("playwright")),
         agents=_parse_agents(data.get("agents")),
+        routing=routing,
         isolation=_parse_isolation_config(data.get("isolation")),
         exclude=_parse_exclude_patterns(data.get("exclude")),
         repair_policy=_parse_repair_policy(
@@ -695,6 +720,41 @@ def _parse_user_config(data: Mapping[str, object]) -> UserConfig:
     )
 
 
+def _merge_role_preferences(
+    user_prefs: RolePreferencesConfig,
+    project_prefs: RolePreferencesConfig,
+) -> RolePreferencesConfig:
+    return RolePreferencesConfig(
+        planner=project_prefs.planner or user_prefs.planner,
+        implementer=project_prefs.implementer or user_prefs.implementer,
+        instrumenter=project_prefs.instrumenter or user_prefs.instrumenter,
+    )
+
+
+def _merge_routing_config(
+    user_routing: RoutingConfig,
+    project_routing: RoutingConfig | None,
+) -> RoutingConfig:
+    if project_routing is None:
+        return user_routing
+    project_prefs = project_routing.role_preferences
+    if not any(
+        (
+            project_prefs.planner,
+            project_prefs.implementer,
+            project_prefs.instrumenter,
+        )
+    ):
+        return user_routing
+    return evolve(
+        user_routing,
+        role_preferences=_merge_role_preferences(
+            user_routing.role_preferences,
+            project_prefs,
+        ),
+    )
+
+
 def _merge_agent_configs(
     user_agents: tuple[AgentConfig, ...],
     project_agents: tuple[AgentConfig, ...],
@@ -710,6 +770,9 @@ def _merge_agent_configs(
             plugin=agent.plugin
             if agent.plugin is not None
             else existing.plugin,
+            provider=agent.provider
+            if agent.provider is not None
+            else existing.provider,
             profile=agent.profile
             if agent.profile is not None
             else existing.profile,
@@ -718,6 +781,18 @@ def _merge_agent_configs(
                 agent.executable
                 if agent.executable is not None
                 else existing.executable
+            ),
+            model_candidates=agent.model_candidates
+            or existing.model_candidates,
+            reasoning_effort=(
+                agent.reasoning_effort
+                if agent.reasoning_effort is not None
+                else existing.reasoning_effort
+            ),
+            max_turns=(
+                agent.max_turns
+                if agent.max_turns is not None
+                else existing.max_turns
             ),
         )
     return tuple(merged[agent_id] for agent_id in sorted(merged))
@@ -784,7 +859,10 @@ def merge_config(
         isolation=project_config.isolation,
         exclude=project_config.exclude,
         repair_policy=project_config.repair_policy,
-        routing=user_config.routing,
+        routing=_merge_routing_config(
+            user_config.routing,
+            project_config.routing,
+        ),
         full_verification=full_verification,
         playwright_mcp=project_config.playwright_mcp,
         target=project_config.target,

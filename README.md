@@ -312,25 +312,33 @@ Configuration is layered; later layers win via a deep merge:
    source of truth for what is under test.
 
 The `agents` section mixes **role assignments** (`planner`, `implementer`,
-`instrumenter` → a plugin + optional profile) with **plugin definitions**
-(`claude`, `codex`, `cursor` → `enabled` / `executable` overrides). Profiles
-(`difficult` / `cheap`) pick a cost/capability tier within one CLI, so a planner
-can run a stronger model than the implementer.
+`instrumenter` → a plugin or variant + optional profile), **plugin definitions**
+(`claude`, `codex`, `cursor` → `enabled` / `executable` overrides), and
+**provider variants** (custom ids with `provider` + optional `model_candidates`
+/ `reasoning_effort` / `max_turns`). Variants let one CLI appear multiple times in a failover
+list — for example `cursor_auto` (no explicit model) and `cursor_gpt` (GPT
+planner model). Profiles (`difficult` / `cheap`) still pick a cost/capability
+tier within one CLI when no variant model is configured.
 
-User-level `routing` settings control provider selection and failover:
+`routing` settings control provider selection and failover. User config holds
+defaults; project `e2e-ai.yml` may override `routing.role_preferences` for
+that repository:
 
-- `role_preferences` — ordered provider lists per role (`planner`,
+- `role_preferences` — ordered provider or variant ids per role (`planner`,
   `implementer`, `instrumenter`). When a provider fails for a retryable reason
-  (quota, auth, timeout, schema, empty output, no-op implementation), the
-  repair loop rotates to the next provider in the list for that role.
+  (quota, auth, timeout, schema, empty output, no-op implementation,
+  max-turns exceeded, permission denied), the repair loop rotates to the next
+  repair loop rotates to the next entry in the list for that role.
 - `failover.enabled` — turn provider rotation on or off (default: on).
 - `failover.max_switches_per_test` — cap provider switches per test so a bad
   environment cannot loop forever (default: `6`).
 - `failover.retryable_exit_classes` — optional override for which normalized
   exit classes trigger a switch.
 
-When `role_preferences` is omitted, each role uses its assigned plugin first,
-then the built-in preference order for the other installed providers.
+Variant `model_candidates` are matched against each CLI's runtime model catalog
+when available; variants with no resolvable model are skipped during selection.
+`max_turns` overrides Claude `--max-turns` for planner/instrumenter roles when
+set on a plugin or variant entry.
 
 The `target` section declares which parts of the repository repair agents may
 edit:

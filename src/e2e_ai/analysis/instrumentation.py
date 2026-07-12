@@ -1,9 +1,14 @@
 """Second-pass instrumentation policy and request building.
 
 Policy (from the plan):
-  * first failure       -> create a plan and implement it;
-  * failure after a fix -> ask a smarter agent to instrument/diagnose;
-  * failure after that  -> create a new plan with the added context.
+  * first failure in the current run -> create a plan and implement it;
+  * failure after a fix in the same run -> ask a smarter agent to
+    instrument/diagnose;
+  * failure after that -> create a new plan with the added context.
+
+Escalation counts only attempts and plans from the active repair run; prior
+runs still contribute to planner context but do not skip straight to
+instrumentation.
 
 Instrumentation means *temporary, reversible* diagnostic work. The implementing
 agent must remove it after the fix; the acceptance gate fails if the marker

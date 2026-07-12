@@ -128,13 +128,24 @@ def should_escalate_to_instrumentation(
     test_id: str,
     signature: str,
     *,
+    run_id: str,
     max_same_signature: int = 2,
 ) -> bool:
-    """Return whether repeated failure needs instrumentation."""
+    """Return whether repeated failure in this run needs instrumentation.
+
+    Escalation requires at least one repair plan from the current run (a fix
+    was already attempted) and the same failure signature recurring enough
+    times within that run. History from earlier runs does not count.
+    """
 
     prior_plans = conn.execute(
-        "SELECT COUNT(*) FROM repair_plans WHERE test_id = ?",
-        (test_id,),
+        """
+        SELECT COUNT(*) FROM repair_plans rp
+        JOIN failure_packets fp ON fp.id = rp.failure_packet_id
+        JOIN attempts a ON a.id = fp.attempt_id
+        WHERE rp.test_id = ? AND a.run_id = ?
+        """,
+        (test_id, run_id),
     ).fetchone()[0]
     if int(prior_plans) < 1:
         return False
@@ -143,8 +154,8 @@ def should_escalate_to_instrumentation(
         """
         SELECT COUNT(*) FROM failure_packets fp
         JOIN attempts a ON a.id = fp.attempt_id
-        WHERE a.test_id = ? AND fp.signature = ?
+        WHERE a.test_id = ? AND fp.signature = ? AND a.run_id = ?
         """,
-        (test_id, signature),
+        (test_id, signature, run_id),
     ).fetchone()[0]
     return int(same_sig) >= max_same_signature

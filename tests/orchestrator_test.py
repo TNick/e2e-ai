@@ -25,7 +25,10 @@ from e2e_ai.orchestrator import (
     run_one_test_until_resolved,
     validate_transition,
 )
-from e2e_ai.orchestrator.decisions import should_stop_test
+from e2e_ai.orchestrator.decisions import (
+    should_escalate_to_instrumentation,
+    should_stop_test,
+)
 from e2e_ai.orchestrator.loop import (
     _will_start_docker_containers,
     run_repair_loop,
@@ -844,6 +847,103 @@ class TestRepairBudget:
 
         assert not should_stop_test(conn, TEST.id, 3, run_id=new_run)
         assert should_stop_test(conn, TEST.id, 3)
+        conn.close()
+
+
+class TestInstrumentationEscalation:
+    """Instrumentation escalation is scoped to the current run."""
+
+    def _failed_attempt(
+        self,
+        tmp_path: Path,
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        attempt_index: int,
+        error_message: str = "assertion failed",
+    ):
+        failed = _result(
+            tmp_path,
+            passed=False,
+            attempt_index=attempt_index,
+        )
+        create_attempt_record(
+            conn,
+            run_id=run_id,
+            test_id=TEST.id,
+            attempt_index=attempt_index,
+            work_dir=str(failed.work_dir),
+            attempt_id=failed.attempt_id,
+        )
+        finish_attempt_record(conn, failed)
+        packet = build_failure_packet(
+            test=TEST,
+            attempt=failed,
+            report=None,
+            failure=FailureInfo(error_message=error_message),
+        )
+        insert_failure_packet(conn, packet)
+        return failed, packet
+
+    def test_historical_plans_do_not_escalate_new_run(self, tmp_path):
+        config = _config(tmp_path)
+        conn = ensure_database(database_path(config))
+        refresh_inventory(conn, config, Inventory(tests=(TEST,)))
+        store = RepairStore(conn)
+        old_run = store.start_run(config.project_id, reason="old")
+        new_run = store.start_run(config.project_id, reason="new")
+
+        _, first_packet = self._failed_attempt(
+            tmp_path, conn, run_id=old_run, attempt_index=0
+        )
+        record_repair_plan(
+            conn,
+            test_id=TEST.id,
+            failure_packet_id=first_packet.id,
+            agent_id="claude",
+            plan_text="old plan",
+        )
+        self._failed_attempt(tmp_path, conn, run_id=old_run, attempt_index=1)
+        _, new_packet = self._failed_attempt(
+            tmp_path, conn, run_id=new_run, attempt_index=0
+        )
+
+        assert not should_escalate_to_instrumentation(
+            conn,
+            TEST.id,
+            new_packet.signature,
+            run_id=new_run,
+        )
+        conn.close()
+
+    def test_escalates_after_fix_attempt_in_same_run(self, tmp_path):
+        config = _config(tmp_path)
+        conn = ensure_database(database_path(config))
+        refresh_inventory(conn, config, Inventory(tests=(TEST,)))
+        store = RepairStore(conn)
+        run_id = store.start_run(config.project_id, reason="repair")
+
+        _, first_packet = self._failed_attempt(
+            tmp_path, conn, run_id=run_id, attempt_index=0
+        )
+        record_repair_plan(
+            conn,
+            test_id=TEST.id,
+            failure_packet_id=first_packet.id,
+            agent_id="claude",
+            plan_text="first plan",
+        )
+        _, second_packet = self._failed_attempt(
+            tmp_path, conn, run_id=run_id, attempt_index=1
+        )
+
+        assert first_packet.signature == second_packet.signature
+        assert should_escalate_to_instrumentation(
+            conn,
+            TEST.id,
+            second_packet.signature,
+            run_id=run_id,
+        )
         conn.close()
 
 

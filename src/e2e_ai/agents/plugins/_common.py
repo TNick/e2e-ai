@@ -20,6 +20,7 @@ from ..invocation import (
     run_agent_command,
     write_agent_invocation_manifest,
 )
+from ..model_catalog import fetch_model_catalog, resolve_model_candidate
 from ..quota import QuotaSnapshot, invalidate_quota_cache
 from ..schemas import (
     ImplementRequest,
@@ -32,6 +33,7 @@ from ..schemas import (
 logger = logging.getLogger(__name__)
 
 _CAPABILITIES_TTL_SECONDS = 60.0
+_UNRESOLVED_MODEL = object()
 
 
 def resolve_executable(config: AgentConfig, default: str) -> str:
@@ -183,6 +185,43 @@ class BaseCLIPlugin:
         self.routing = routing
         self._capabilities_cache: tuple[float, AgentCapabilities] | None = None
         self._quota_cache: tuple[float, QuotaSnapshot] | None = None
+        self._resolved_model: str | None | object = _UNRESOLVED_MODEL
+
+    @property
+    def base_provider(self) -> str:
+        return self.config.provider or self.plugin_id
+
+    @property
+    def resolved_model(self) -> str | None:
+        """Return the runtime-resolved model for this variant, if any."""
+
+        if self._resolved_model is _UNRESOLVED_MODEL:
+            self._resolved_model = self._resolve_configured_model()
+        return self._resolved_model  # type: ignore[return-value]
+
+    def _resolve_configured_model(self) -> str | None:
+        if not self.config.model_candidates:
+            return None
+        catalog = fetch_model_catalog(self.base_provider, self.executable)
+        resolved = resolve_model_candidate(
+            self.config.model_candidates,
+            catalog,
+        )
+        if resolved is None:
+            logger.log(
+                1,
+                "no model candidate available for agent %s (provider=%s)",
+                self.id,
+                self.base_provider,
+            )
+        return resolved
+
+    def model_available(self) -> bool:
+        """Return whether this variant can run with a resolved model."""
+
+        if not self.config.model_candidates:
+            return True
+        return self.resolved_model is not None
 
     @property
     def id(self) -> str:
@@ -215,6 +254,7 @@ class BaseCLIPlugin:
         ok, out = run_probe(self.executable, self.health_argv)
         if ok and out:
             version = out.splitlines()[0][:120]
+        catalog = fetch_model_catalog(self.base_provider, self.executable)
         caps = AgentCapabilities(
             plugin_id=self.id,
             executable=self.executable,
@@ -229,6 +269,7 @@ class BaseCLIPlugin:
             supports_mcp_tool_allowlist=self.supports_mcp_tool_allowlist,
             supports_mcp_required_server=self.supports_mcp_required_server,
             supports_strict_mcp_config=self.supports_strict_mcp_config,
+            models=catalog,
         )
         self._capabilities_cache = (now, caps)
         return caps

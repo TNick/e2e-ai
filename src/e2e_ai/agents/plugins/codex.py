@@ -34,6 +34,7 @@ def build_exec_argv(
     approval: str | None = None,
     profile_args: list[str] | None = None,
     mcp_profile: str | None = None,
+    model: str | None = None,
 ) -> list[str]:
     """Build argv for ``codex exec`` with sandbox and optional schema file."""
 
@@ -43,6 +44,8 @@ def build_exec_argv(
     argv = [executable, "exec", "--json", "--ignore-user-config"]
     if schema_path is not None:
         argv.extend(["--output-schema", str(schema_path)])
+    if model:
+        argv.extend(["-m", model])
     argv.extend(["--sandbox", sandbox])
     # Codex accepts approval policy only as a config override on ``exec``,
     # not via the global ``--ask-for-approval`` flag after the subcommand.
@@ -87,11 +90,22 @@ def prepare_codex_mcp_runtime(
     return run_env, profile_name, cleanup_paths
 
 
-def _profile_args(profile: str | None) -> list[str]:
-    if profile == "difficult":
-        return ["-c", "model_reasoning_effort=high"]
-    if profile == "cheap":
-        return ["-c", "model_reasoning_effort=low"]
+def _profile_args(
+    profile: str | None,
+    *,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> list[str]:
+    if model:
+        return []
+    effort = reasoning_effort
+    if effort is None:
+        if profile == "difficult":
+            effort = "high"
+        elif profile == "cheap":
+            effort = "low"
+    if effort:
+        return ["-c", f"model_reasoning_effort={effort}"]
     return []
 
 
@@ -155,8 +169,13 @@ class CodexAgent(BaseCLIPlugin):
             sandbox=sandbox,
             schema_path=schema_path,
             approval=approval,
-            profile_args=_profile_args(request.profile),
+            profile_args=_profile_args(
+                request.profile,
+                model=self.resolved_model,
+                reasoning_effort=self.config.reasoning_effort,
+            ),
             mcp_profile=mcp_profile,
+            model=self.resolved_model,
         )
         snap = self.quota(quota_task)
         return invoke_argv(
@@ -214,7 +233,12 @@ class CodexAgent(BaseCLIPlugin):
             self.executable,
             sandbox="read-only",
             schema_path=schema_path,
-            profile_args=_profile_args(request.profile),
+            profile_args=_profile_args(
+                request.profile,
+                model=self.resolved_model,
+                reasoning_effort=self.config.reasoning_effort,
+            ),
+            model=self.resolved_model,
         )
 
     def build_implement_argv(self, request: ImplementRequest) -> list[str]:
@@ -224,7 +248,12 @@ class CodexAgent(BaseCLIPlugin):
             sandbox="workspace-write",
             schema_path=schema_path,
             approval="never",
-            profile_args=_profile_args(request.profile),
+            profile_args=_profile_args(
+                request.profile,
+                model=self.resolved_model,
+                reasoning_effort=self.config.reasoning_effort,
+            ),
+            model=self.resolved_model,
         )
 
     def build_instrument_argv(
@@ -240,7 +269,12 @@ class CodexAgent(BaseCLIPlugin):
             sandbox="workspace-write",
             schema_path=schema_path,
             approval="never",
-            profile_args=_profile_args(request.profile),
+            profile_args=_profile_args(
+                request.profile,
+                model=self.resolved_model,
+                reasoning_effort=self.config.reasoning_effort,
+            ),
+            model=self.resolved_model,
         )
 
 

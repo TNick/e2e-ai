@@ -27,6 +27,7 @@ def build_plan_mode_argv(
     *,
     schema: dict[str, object] | None = None,
     profile_args: list[str] | None = None,
+    model: str | None = None,
     max_turns: int | None = None,
 ) -> list[str]:
     """Build argv for planning-only Claude requests."""
@@ -44,6 +45,8 @@ def build_plan_mode_argv(
         argv.extend(["--json-schema", schema_json(schema)])
     if max_turns is not None:
         argv.extend(["--max-turns", str(max_turns)])
+    if model:
+        argv.extend(["--model", model])
     if profile_args:
         argv.extend(profile_args)
     return argv
@@ -55,6 +58,7 @@ def build_implement_argv(
     permission_mode: str = "dontAsk",
     schema: dict[str, object] | None = None,
     profile_args: list[str] | None = None,
+    model: str | None = None,
     max_turns: int = 12,
 ) -> list[str]:
     """Build argv for implementation Claude requests."""
@@ -72,12 +76,20 @@ def build_implement_argv(
     ]
     if schema is not None:
         argv.extend(["--json-schema", schema_json(schema)])
+    if model:
+        argv.extend(["--model", model])
     if profile_args:
         argv.extend(profile_args)
     return argv
 
 
-def _profile_args(profile: str | None) -> list[str]:
+DEFAULT_PLANNER_MAX_TURNS = 20
+DEFAULT_INSTRUMENTER_MAX_TURNS = 14
+
+
+def _profile_args(profile: str | None, model: str | None = None) -> list[str]:
+    if model:
+        return []
     if profile == "difficult":
         return ["--model", "opus"]
     if profile == "cheap":
@@ -124,15 +136,18 @@ class ClaudeAgent(BaseCLIPlugin):
         return build_plan_mode_argv(
             self.executable,
             schema=schema,
-            profile_args=_profile_args(request.profile),
-            max_turns=6,
+            profile_args=_profile_args(request.profile, self.resolved_model),
+            model=self.resolved_model,
+            max_turns=self.config.max_turns or DEFAULT_PLANNER_MAX_TURNS,
         )
 
     def build_implement_argv(self, request: ImplementRequest) -> list[str]:
         return build_implement_argv(
             self.executable,
             schema=implementation_output_schema(),
-            profile_args=_profile_args(request.profile),
+            profile_args=_profile_args(request.profile, self.resolved_model),
+            model=self.resolved_model,
+            max_turns=self.config.max_turns or 12,
         )
 
     def build_instrument_argv(
@@ -145,8 +160,9 @@ class ClaudeAgent(BaseCLIPlugin):
         return build_plan_mode_argv(
             self.executable,
             schema=schema,
-            profile_args=_profile_args(request.profile),
-            max_turns=4,
+            profile_args=_profile_args(request.profile, self.resolved_model),
+            model=self.resolved_model,
+            max_turns=self.config.max_turns or DEFAULT_INSTRUMENTER_MAX_TURNS,
         )
 
 

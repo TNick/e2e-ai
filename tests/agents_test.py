@@ -14,23 +14,43 @@ from e2e_ai.agents.capabilities import (
 )
 from e2e_ai.agents.invocation import (
     EXIT_AUTH_ERROR,
+    EXIT_MAX_TURNS_EXCEEDED,
+    EXIT_PERMISSION_DENIED,
     EXIT_QUOTA_ERROR,
     EXIT_TASK_FAILURE,
     classify_agent_exit,
     run_agent_command,
 )
 from e2e_ai.agents.plugins._common import remove_temporary_path
-from e2e_ai.agents.plugins.claude import build_plan_mode_argv
+from e2e_ai.agents.plugins.claude import (
+    DEFAULT_INSTRUMENTER_MAX_TURNS,
+    DEFAULT_PLANNER_MAX_TURNS,
+    build_plan_mode_argv,
+    create_claude_agent,
+)
 from e2e_ai.agents.plugins.codex import (
     build_exec_argv,
     build_login_argv,
     prepare_codex_mcp_runtime,
 )
-from e2e_ai.agents.plugins.cursor import create_cursor_agent
+from e2e_ai.agents.plugins.cursor import (
+    build_implement_argv_list,
+    build_plan_argv_list,
+    create_cursor_agent,
+)
 from e2e_ai.agents.quota import QuotaSnapshot, enough_quota
 from e2e_ai.agents.registry import create_agent_plugins
-from e2e_ai.agents.router import ROLE_TASK_CLASS, select_agent
-from e2e_ai.agents.routing_outcomes import classify_invocation_exit
+from e2e_ai.agents.router import ROLE_TASK_CLASS, select_agent, select_provider
+from e2e_ai.agents.routing_outcomes import (
+    RoutingAction,
+    classify_invocation_exit,
+    decide_routing_action,
+)
+from e2e_ai.agents.schemas import (
+    ImplementRequest,
+    InstrumentRequest,
+    PlanRequest,
+)
 from e2e_ai.config import (
     AgentConfig,
     CommandSpec,
@@ -38,9 +58,32 @@ from e2e_ai.config import (
     IsolationConfig,
     PlaywrightConfig,
     RepairPolicy,
+    RolePreferencesConfig,
     RoutingConfig,
 )
 from e2e_ai.mcp.models import PlaywrightMcpConfig
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "agents"
+
+
+def _plan_request(tmp_path: Path | None = None) -> PlanRequest:
+    work_dir = tmp_path or Path("/tmp/demo")
+    return PlanRequest(
+        prompt="plan",
+        work_dir=work_dir,
+        profile=None,
+        require_schema=True,
+    )
+
+
+def _instrument_request(tmp_path: Path | None = None) -> InstrumentRequest:
+    work_dir = tmp_path or Path("/tmp/demo")
+    return InstrumentRequest(
+        prompt="instrument",
+        work_dir=work_dir,
+        profile=None,
+        require_schema=True,
+    )
 
 
 def _config(
@@ -120,6 +163,35 @@ class TestAgentExit:
         )
         assert classify_agent_exit(2, stdout, "") == EXIT_QUOTA_ERROR
 
+    def test_ignores_claude_rate_limit_event_metadata(self) -> None:
+        stdout = (
+            '{"type":"rate_limit_event","rate_limit_info":{'
+            '"status":"allowed","rateLimitType":"five_hour"}}\n'
+        )
+        assert classify_agent_exit(1, stdout, "") == EXIT_TASK_FAILURE
+
+    def test_classifies_claude_error_max_turns(self) -> None:
+        stdout = (
+            '{"type":"result","subtype":"error_max_turns",'
+            '"is_error":true,"num_turns":7}\n'
+        )
+        assert classify_agent_exit(1, stdout, "") == EXIT_MAX_TURNS_EXCEEDED
+
+    def test_classifies_cursor_workspace_trust_prompt(self) -> None:
+        stdout = (
+            "Workspace Trust Required\n"
+            "Pass --trust, --yolo, or -f if you trust this directory\n"
+        )
+        assert classify_agent_exit(1, stdout, "") == EXIT_PERMISSION_DENIED
+
+    def test_real_claude_fixture_classifies_max_turns_not_quota(
+        self,
+    ) -> None:
+        stdout = (FIXTURES / "claude-max-turns-rate-limit-event.log").read_text(
+            encoding="utf-8"
+        )
+        assert classify_agent_exit(1, stdout, "") == EXIT_MAX_TURNS_EXCEEDED
+
 
 class TestInvocationExitRouting:
     def test_reclassifies_task_failure_from_stdout(self) -> None:
@@ -156,6 +228,24 @@ class TestInvocationExitRouting:
             classify_agent_exit(0, "rate limit exceeded", "")
             == EXIT_TASK_FAILURE
         )
+
+    def test_max_turns_exceeded_switches_provider(self) -> None:
+        action = decide_routing_action(
+            EXIT_MAX_TURNS_EXCEEDED,
+            config=_config(),
+            providers_remaining=True,
+            switches_remaining=True,
+        )
+        assert action is RoutingAction.SWITCH_PROVIDER
+
+    def test_permission_denied_switches_provider(self) -> None:
+        action = decide_routing_action(
+            EXIT_PERMISSION_DENIED,
+            config=_config(),
+            providers_remaining=True,
+            switches_remaining=True,
+        )
+        assert action is RoutingAction.SWITCH_PROVIDER
 
 
 class TestAgentInvocation:
@@ -332,6 +422,43 @@ class TestClaude:
         assert "--json-schema" in argv
         assert "--verbose" in argv
 
+    def test_planner_defaults_to_higher_max_turns(self) -> None:
+        agent = create_claude_agent(
+            AgentConfig(id="claude", enabled=True),
+            RoutingConfig(allow_canary=False),
+        )
+        argv = agent.build_plan_argv(
+            _plan_request(),
+            schema={"type": "object"},
+        )
+        assert argv[argv.index("--max-turns") + 1] == str(
+            DEFAULT_PLANNER_MAX_TURNS
+        )
+
+    def test_instrumenter_defaults_to_higher_max_turns(self) -> None:
+        agent = create_claude_agent(
+            AgentConfig(id="claude", enabled=True),
+            RoutingConfig(allow_canary=False),
+        )
+        argv = agent.build_instrument_argv(
+            _instrument_request(),
+            schema={"type": "object"},
+        )
+        assert argv[argv.index("--max-turns") + 1] == str(
+            DEFAULT_INSTRUMENTER_MAX_TURNS
+        )
+
+    def test_max_turns_override_from_config(self) -> None:
+        agent = create_claude_agent(
+            AgentConfig(id="claude", enabled=True, max_turns=9),
+            RoutingConfig(allow_canary=False),
+        )
+        argv = agent.build_plan_argv(
+            _plan_request(),
+            schema={"type": "object"},
+        )
+        assert argv[argv.index("--max-turns") + 1] == "9"
+
 
 class TestCursor:
     def test_uses_stdin_prompt_transport(self) -> None:
@@ -342,6 +469,43 @@ class TestCursor:
 
         assert agent.prompt_transport == "stdin"
 
+    def test_auto_variant_omits_model_flag(self) -> None:
+        argv = build_plan_argv_list("agent")
+        assert "--model" not in argv
+        assert "--trust" in argv
+
+    def test_plan_argv_includes_trust(self) -> None:
+        argv = build_plan_argv_list("agent")
+        assert "--trust" in argv
+
+    def test_implement_argv_includes_trust_and_force(self) -> None:
+        argv = build_implement_argv_list("agent", force=True)
+        assert "--trust" in argv
+        assert "--force" in argv
+
+    def test_implement_plugin_always_forces(self) -> None:
+        agent = create_cursor_agent(
+            AgentConfig(id="cursor", enabled=True),
+            RoutingConfig(allow_canary=False),
+        )
+        argv = agent.build_implement_argv(
+            ImplementRequest(prompt="implement", work_dir=Path("/tmp/demo")),
+        )
+        assert "--trust" in argv
+        assert "--force" in argv
+
+    def test_gpt_variant_includes_model_flag(self) -> None:
+        argv = build_plan_argv_list("agent", model="gpt-5.6-sol")
+        assert argv[argv.index("--model") + 1] == "gpt-5.6-sol"
+
+    def test_composer_implementer_includes_model_flag(self) -> None:
+        argv = build_implement_argv_list(
+            "agent",
+            force=True,
+            model="composer-2.5",
+        )
+        assert argv[argv.index("--model") + 1] == "composer-2.5"
+
     def test_quota_unknown_without_canary(self) -> None:
         agent = create_cursor_agent(
             AgentConfig(id="cursor", enabled=True),
@@ -350,6 +514,110 @@ class TestCursor:
         snapshot = agent.quota("normal")
         assert snapshot.state == QUOTA_UNKNOWN
         assert snapshot.optimistic is False
+
+
+class TestProviderVariants:
+    def test_resolved_model_is_none_without_candidates(self) -> None:
+        agent = create_cursor_agent(
+            AgentConfig(id="cursor", enabled=True),
+            RoutingConfig(allow_canary=False),
+        )
+        assert agent.resolved_model is None
+
+    def test_create_variant_plugins(self) -> None:
+        config = EffectiveConfig(
+            project_id="demo",
+            project_root=Path("/tmp/demo"),
+            state_dir=Path("/tmp/demo/.e2e-ai"),
+            playwright=PlaywrightConfig(
+                list_command=CommandSpec(argv=("echo", "list")),
+                run_command=CommandSpec(argv=("echo", "run")),
+            ),
+            agents=(
+                AgentConfig(
+                    id="cursor_gpt",
+                    provider="cursor",
+                    model_candidates=("gpt-5.6-sol",),
+                ),
+                AgentConfig(id="cursor", enabled=True, executable="agent"),
+            ),
+            isolation=IsolationConfig(),
+            exclude=(),
+            repair_policy=RepairPolicy(),
+            routing=RoutingConfig(
+                role_preferences=RolePreferencesConfig(
+                    planner=("cursor_gpt",),
+                ),
+            ),
+        )
+        plugins = create_agent_plugins(config)
+        assert "cursor_gpt" in plugins
+        assert plugins["cursor_gpt"].id == "cursor_gpt"
+
+    def test_select_provider_skips_unavailable_variant(
+        self, monkeypatch
+    ) -> None:
+        config = EffectiveConfig(
+            project_id="demo",
+            project_root=Path("/tmp/demo"),
+            state_dir=Path("/tmp/demo/.e2e-ai"),
+            playwright=PlaywrightConfig(
+                list_command=CommandSpec(argv=("echo", "list")),
+                run_command=CommandSpec(argv=("echo", "run")),
+            ),
+            agents=(
+                AgentConfig(id="cursor_gpt", provider="cursor"),
+                AgentConfig(id="cursor", enabled=True, executable="agent"),
+                AgentConfig(id="codex", enabled=True, executable="codex"),
+            ),
+            isolation=IsolationConfig(),
+            exclude=(),
+            repair_policy=RepairPolicy(),
+            routing=RoutingConfig(
+                role_preferences=RolePreferencesConfig(
+                    planner=("cursor_gpt", "codex"),
+                ),
+            ),
+        )
+        plugins = create_agent_plugins(config)
+
+        class UnavailableVariant:
+            id = "cursor_gpt"
+
+            def check_login(self):
+                from e2e_ai.agents.capabilities import QUOTA_READY, AgentHealth
+
+                return AgentHealth(
+                    agent_id=self.id,
+                    logged_in=True,
+                    verified=True,
+                    state=QUOTA_READY,
+                )
+
+            def discover(self):
+                from e2e_ai.agents.capabilities import AgentCapabilities
+
+                return AgentCapabilities(plugin_id=self.id, schema_mode=True)
+
+            def quota(self, task_class):
+                from e2e_ai.agents.capabilities import QUOTA_READY
+                from e2e_ai.agents.quota import QuotaSnapshot
+
+                _ = task_class
+                return QuotaSnapshot(plugin_id=self.id, state=QUOTA_READY)
+
+            def model_available(self):
+                return False
+
+        plugins["cursor_gpt"] = UnavailableVariant()  # type: ignore[assignment]
+
+        selection = select_provider(
+            config,
+            "planner",
+            ROLE_TASK_CLASS["planner"],
+            plugins,
+        )
+        assert selection.selected_provider == "codex"
 
 
 class TestMcpCapabilities:

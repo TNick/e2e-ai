@@ -141,6 +141,8 @@ def _score_candidate(
     score = 0
     if not plugin.check_login().logged_in:
         return -1000
+    if not getattr(plugin, "model_available", lambda: True)():
+        return -500
     if not enough_quota(task_class, snapshot) and snapshot.state != "UNKNOWN":
         return -500
     if snapshot.state == "UNKNOWN" and not routing_allow_unknown:

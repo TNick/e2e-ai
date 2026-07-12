@@ -101,6 +101,18 @@ def create_agent_plugins(config: EffectiveConfig) -> dict[str, AgentPlugin]:
     specs = _discover_specs()
     overrides = _plugin_overrides(config)
     plugins: dict[str, AgentPlugin] = dict(_EXTRA_PLUGINS)
+    variant_agents: list[AgentConfig] = []
+
+    for agent in config.agents:
+        if agent.provider is None:
+            continue
+        if agent.provider not in BUILTIN_AGENT_FACTORIES:
+            continue
+        if agent.id in BUILTIN_AGENT_FACTORIES:
+            continue
+        if not agent.enabled:
+            continue
+        variant_agents.append(agent)
 
     for plugin_id, factory in BUILTIN_AGENT_FACTORIES.items():
         override = overrides.get(plugin_id, {})
@@ -112,6 +124,19 @@ def create_agent_plugins(config: EffectiveConfig) -> dict[str, AgentPlugin]:
             executable=override.get("executable"),
         )
         plugins[plugin_id] = factory(agent_cfg, config)
+
+    for agent in variant_agents:
+        factory = BUILTIN_AGENT_FACTORIES[agent.provider]
+        base_override = overrides.get(agent.provider, {})
+        agent_cfg = AgentConfig(
+            id=agent.id,
+            provider=agent.provider,
+            enabled=agent.enabled,
+            executable=agent.executable or base_override.get("executable"),
+            model_candidates=agent.model_candidates,
+            reasoning_effort=agent.reasoning_effort,
+        )
+        plugins[agent.id] = factory(agent_cfg, config)
 
     for agent_id, spec in specs.items():
         if agent_id in BUILTIN_AGENT_FACTORIES:

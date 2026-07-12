@@ -8,6 +8,7 @@ from ..config.models import EffectiveConfig
 from .base import AgentRunResult
 from .invocation import (
     EXIT_AUTH_ERROR,
+    EXIT_MAX_TURNS_EXCEEDED,
     EXIT_MISCONFIGURED,
     EXIT_MODEL_UNAVAILABLE,
     EXIT_PERMISSION_DENIED,
@@ -31,6 +32,8 @@ DEFAULT_RETRYABLE_EXIT_CLASSES: tuple[str, ...] = (
     EXIT_MODEL_UNAVAILABLE,
     EXIT_EMPTY_OUTPUT,
     EXIT_NOOP_IMPLEMENTATION,
+    EXIT_MAX_TURNS_EXCEEDED,
+    EXIT_PERMISSION_DENIED,
 )
 
 

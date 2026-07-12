@@ -23,6 +23,7 @@ def build_plan_argv_list(
     executable: str,
     *,
     profile_args: list[str] | None = None,
+    model: str | None = None,
 ) -> list[str]:
     """Build argv for planner Cursor requests without ``--force``."""
 
@@ -33,7 +34,10 @@ def build_plan_argv_list(
         "plan",
         "--output-format",
         "stream-json",
+        "--trust",
     ]
+    if model:
+        argv.extend(["--model", model])
     if profile_args:
         argv.extend(profile_args)
     return argv
@@ -44,12 +48,15 @@ def build_implement_argv_list(
     *,
     force: bool,
     profile_args: list[str] | None = None,
+    model: str | None = None,
 ) -> list[str]:
     """Build argv for implementer Cursor requests."""
 
-    argv = [executable, "-p", "--output-format", "stream-json"]
+    argv = [executable, "-p", "--output-format", "stream-json", "--trust"]
     if force:
         argv.append("--force")
+    if model:
+        argv.extend(["--model", model])
     if profile_args:
         argv.extend(profile_args)
     return argv
@@ -96,13 +103,17 @@ class CursorAgent(BaseCLIPlugin):
         schema: dict[str, object] | None,
     ) -> list[str]:
         _ = schema
-        return build_plan_argv_list(self.executable)
+        return build_plan_argv_list(
+            self.executable,
+            model=self.resolved_model,
+        )
 
     def build_implement_argv(self, request: ImplementRequest) -> list[str]:
         return build_implement_argv_list(
             self.executable,
-            force=request.isolated_workspace,
+            force=True,
             profile_args=[],
+            model=self.resolved_model,
         )
 
     def build_instrument_argv(
@@ -112,7 +123,10 @@ class CursorAgent(BaseCLIPlugin):
         schema: dict[str, object] | None,
     ) -> list[str]:
         _ = schema
-        return build_plan_argv_list(self.executable)
+        return build_plan_argv_list(
+            self.executable,
+            model=self.resolved_model,
+        )
 
 
 def create_cursor_agent(
