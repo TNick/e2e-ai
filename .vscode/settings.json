@@ -1,8 +1,16 @@
 {
     "cSpell.words": [
+        "cancelbtn",
+        "ckey",
+        "cval",
+        "dbpath",
         "distlift",
+        "fval",
         "instrumenter",
+        "opterr",
         "pypi",
-        "pyproject"
+        "pyproject",
+        "scls",
+        "startbtn"
     ]
 }

@@ -58,9 +58,10 @@
     user-select: none; transition: transform .2s ease, color .2s ease; }
   .info-btn:hover { color: var(--accent); }
   .info-btn.rotated { transform: rotate(15deg); color: var(--accent); }
+  .page-head { margin-bottom: 18px; }
   .page-desc { max-height: 0; overflow: hidden; opacity: 0; margin: 0;
     transition: max-height .28s ease, opacity .28s ease, margin .28s ease; }
-  .page-desc.open { max-height: 900px; opacity: 1; margin: 8px 0 12px; }
+  .page-desc.open { max-height: 900px; opacity: 1; margin: 10px 0 0; }
   .page-desc .card { margin-bottom: 0; }
   .page-desc dt { color: var(--text); font-weight: 600; margin-top: 6px; }
   .page-desc dd { color: var(--muted); margin: 0 0 2px 0; }
@@ -93,7 +94,8 @@ const NAV = [
   ["settings", "Settings", "…"],
 ];
 const state = { view: "active", info: null, schemas: [], sel: null, rev: "",
-                sort: {}, filter: {}, drawerRender: null };
+                sort: {}, filter: {}, drawerRender: null,
+                descOpen: {}, settingsFull: false };
 
 async function api(path, opts) {
   const r = await fetch("/api" + path, opts);
@@ -152,6 +154,112 @@ function renderTable(id, columns, rows, opts = {}) {
   const body = data.map((r) => `<tr>${columns.map((c) =>
     `<td class="${c.cls ? c.cls(r) : ""}">${c.cell ? c.cell(r) : esc(c.val(r) ?? "")}</td>`).join("")}</tr>`).join("");
   return filterBar + `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+// A page title with an ⓘ info button that reveals a description (transition).
+// Open/closed state persists per view so live refreshes don't collapse it.
+function pageHeader(id, title, descHtml) {
+  const open = !!state.descOpen[id];
+  return `<div class="page-head">
+      <div class="row-flex" style="gap:8px">
+        <h2 style="margin:0">${esc(title)}</h2>
+        <span class="info-btn${open ? " rotated" : ""}" data-info="${id}"
+              title="About this page">i</span>
+      </div>
+      <div class="page-desc${open ? " open" : ""}" id="desc-${id}">
+        <div class="card">${descHtml}</div>
+      </div>
+    </div>`;
+}
+
+// Per-page descriptions: what the page is, what each column means, and any
+// special values it can show.
+const DESCRIPTIONS = {
+  runs: `<p><b>Runs</b> — every e2e-ai run recorded in the state database, newest
+    first. Click a run <b>Id</b> to open its attempts, agent invocations, and
+    failures.</p>
+    <dl>
+      <dt>Started / Finished</dt><dd>Local time (hover for the raw UTC value);
+        these columns sort chronologically. Finished is blank for a run still
+        in progress.</dd>
+      <dt>Status</dt><dd><span class="val">running</span> (in progress),
+        <span class="val">passed</span> (all scheduled tests green),
+        <span class="val">failed</span> (some remained red),
+        <span class="val">stopped</span> (ended early, e.g. --fail-fast or an
+        unsolvable failure).</dd>
+      <dt>Attempts</dt><dd>Number of test attempts recorded in the run.</dd>
+      <dt>Reason</dt><dd>Optional note about why the run ended.</dd>
+      <dt>Id</dt><dd>Stable run id; the link opens the run detail drawer.</dd>
+    </dl>
+    <p class="muted">Use the Status filter to narrow the list.</p>`,
+  tests: `<p><b>Tests</b> — the discovered test inventory (from
+    <code>e2e-ai discover</code>). Click a <b>Title</b> for its attempt history.</p>
+    <dl>
+      <dt>Status</dt><dd>Last known result:
+        <span class="val">passing</span>, <span class="val">failing</span>,
+        <span class="val">blocked</span> (environmental / outside local control),
+        or <span class="val">unknown</span> (not run yet).</dd>
+      <dt>Spec</dt><dd>Playwright spec file the test lives in.</dd>
+      <dt>Title</dt><dd>Full test title (describe › test); the link opens details.</dd>
+      <dt>Project</dt><dd>Playwright project / browser (e.g. chromium).</dd>
+      <dt>Flags</dt><dd><span class="val">excluded</span> (matched an exclude
+        pattern, never scheduled) and/or <span class="val">stale</span> (no
+        longer present in the latest discovery).</dd>
+    </dl>
+    <p class="muted">Use the Status filter to focus on failing or blocked tests.</p>`,
+  failures: `<p><b>Failures</b> — failure packets extracted from the most recent
+    runs. Click a <b>Signature</b> to see the full error and the stored packet
+    payload (screenshots/traces, family, isolation context).</p>
+    <dl>
+      <dt>When</dt><dd>Local time the packet was recorded (sorts by value).</dd>
+      <dt>Signature</dt><dd>Stable grouping hash: the same underlying failure
+        keeps the same signature across runs, so repeats are easy to spot.</dd>
+      <dt>Message</dt><dd>First line of the normalized, secret-redacted error.</dd>
+    </dl>`,
+  agents: `<p><b>Agents</b> — history of agent CLI invocations made by the repair
+    loop (planner, implementer, instrumenter).</p>
+    <dl>
+      <dt>Started / Finished</dt><dd>Local time (sorts by value); Finished is
+        blank while a call is still in flight.</dd>
+      <dt>Role</dt><dd><span class="val">planner</span> writes the fix plan,
+        <span class="val">implementer</span> applies it,
+        <span class="val">instrumenter</span> adds diagnostics on repeat
+        failures.</dd>
+      <dt>Agent</dt><dd>Configured plugin id (e.g. codex, claude, cursor).</dd>
+      <dt>Status</dt><dd><span class="val">ok</span> or
+        <span class="val">error</span> for the invocation.</dd>
+      <dt>Exit</dt><dd>Process exit code (blank while running).</dd>
+    </dl>
+    <p class="muted">Use the Status filter to isolate failed invocations.</p>`,
+  settings: `<p><b>Settings</b> — how this monitor is connected and, optionally,
+    the full effective configuration.</p>
+    <dl>
+      <dt>Simplified</dt><dd>The connection essentials: project, root, state
+        database, bind address, and refresh interval.</dd>
+      <dt>Show all settings</dt><dd>Toggle to reveal the complete
+        <b>effective config</b> — built-in defaults merged with your user config
+        and the project <code>e2e-ai.yml</code> (i.e. everything, including
+        values you did not set). Requires a resolvable project config.</dd>
+    </dl>`,
+};
+
+// Recursively render a config object as a readable key/value tree.
+function renderConfig(obj) {
+  if (obj === null || obj === undefined) return '<span class="cval">null</span>';
+  if (Array.isArray(obj)) {
+    if (!obj.length) return '<span class="cval">[]</span>';
+    return `<div class="node">${obj.map((v) =>
+      `<div>- ${renderConfig(v)}</div>`).join("")}</div>`;
+  }
+  if (typeof obj === "object") {
+    return `<div class="node">${Object.entries(obj).map(([k, v]) =>
+      `<div><span class="ckey">${esc(k)}</span>: ${
+        v !== null && typeof v === "object"
+          ? renderConfig(v)
+          : `<span class="cval">${esc(String(v))}</span>`
+      }</div>`).join("")}</div>`;
+  }
+  return `<span class="cval">${esc(String(obj))}</span>`;
 }
 
 function renderNav() {
@@ -217,7 +325,7 @@ async function viewRuns(el) {
     { label: "Reason", type: "str", val: (r) => r.reason || "", cls: () => "muted" },
     { label: "Id", type: "str", val: (r) => r.id, cell: (r) => `<a data-run="${esc(r.id)}">${esc(r.id)}</a>` },
   ], runs.items, { filter: { label: "Status", val: (r) => r.status } });
-  el.innerHTML = `<h2>Runs (${runs.total})</h2>${table}`;
+  el.innerHTML = pageHeader("runs", `Runs (${runs.total})`, DESCRIPTIONS.runs) + table;
 }
 async function showRun(id) {
   state.drawerRender = () => showRun(id);
@@ -250,7 +358,7 @@ async function viewTests(el) {
     { label: "Project", type: "str", val: (x) => x.project_name || "" },
     { label: "Flags", type: "str", val: flags, cls: () => "muted" },
   ], t.items, { filter: { label: "Status", val: (x) => x.last_status || "unknown" } });
-  el.innerHTML = `<h2>Tests (${t.items.length})</h2>${table}`;
+  el.innerHTML = pageHeader("tests", `Tests (${t.items.length})`, DESCRIPTIONS.tests) + table;
 }
 async function showTest(id) {
   state.drawerRender = () => showTest(id);
@@ -273,13 +381,17 @@ async function viewFailures(el) {
     const full = await api("/runs/" + encodeURIComponent(r.id));
     full.failures.forEach((f) => all.push({ ...f, run: r.id }));
   }
-  if (!all.length) { el.innerHTML = '<h2>Recent failures</h2><div class="card muted">No failures recorded.</div>'; return; }
+  if (!all.length) {
+    el.innerHTML = pageHeader("failures", "Recent failures", DESCRIPTIONS.failures)
+      + '<div class="card muted">No failures recorded.</div>';
+    return;
+  }
   const table = renderTable("failures", [
     { label: "When", type: "date", val: (f) => f.created_at, cell: (f) => local(f.created_at) },
     { label: "Signature", type: "str", val: (f) => f.signature, cell: (f) => `<a data-fail="${esc(f.id)}">${esc(f.signature)}</a>` },
     { label: "Message", type: "str", val: (f) => (f.error_message || "").split("\n")[0], cls: () => "muted" },
   ], all);
-  el.innerHTML = `<h2>Recent failures</h2>${table}`;
+  el.innerHTML = pageHeader("failures", "Recent failures", DESCRIPTIONS.failures) + table;
 }
 async function showFailure(id) {
   state.drawerRender = null;
@@ -299,7 +411,7 @@ async function viewAgents(el) {
     { label: "Status", type: "str", val: (x) => x.status, cls: (x) => scls(x.status) },
     { label: "Exit", type: "num", val: (x) => x.exit_code },
   ], g.items, { filter: { label: "Status", val: (x) => x.status } });
-  el.innerHTML = `<h2>Agent invocations</h2>${table}`;
+  el.innerHTML = pageHeader("agents", "Agent invocations", DESCRIPTIONS.agents) + table;
 }
 
 // ── Commands + options forms ────────────────────────────────────────────────
@@ -395,16 +507,35 @@ async function showOutput(id) {
   draw();
 }
 
-function viewSettings(el) {
+async function viewSettings(el) {
   const i = state.info || {};
-  el.innerHTML = `<h2>Settings</h2><div class="card">
-    <div><b>Project:</b> ${esc(i.project_id)}</div>
+  const simplified = `<div class="card">
+    <div><b>Project:</b> ${esc(i.project_id) || '<span class="muted">(none)</span>'}</div>
     <div><b>Project root:</b> <span class="copy" data-copy="${esc(i.project_root)}">${esc(i.project_root)} ⧉</span></div>
     <div><b>State DB:</b> <span class="copy" data-copy="${esc(i.db_path)}">${esc(i.db_path)} ⧉</span></div>
     <div><b>Bind:</b> ${esc(i.host)}:${esc(i.port)}</div>
     <div><b>Refresh:</b> ${esc(i.refresh_ms)} ms</div>
     <div class="muted" style="margin-top:8px">Read-only monitor. Database access is never written.</div>
   </div>`;
+
+  let full = "";
+  if (state.settingsFull) {
+    let cfg = null;
+    try { cfg = (await api("/config")).config; } catch (e) { /* handled below */ }
+    full = cfg
+      ? `<h3>Effective configuration <span class="muted">(defaults + user + project)</span></h3>
+         <div class="card cfg">${renderConfig(cfg)}</div>`
+      : '<div class="card muted">Full config unavailable — no project config was resolvable (e.g. started with only --db).</div>';
+  }
+
+  el.innerHTML = pageHeader("settings", "Settings", DESCRIPTIONS.settings) + `
+    <label class="row-flex" style="gap:8px; margin:4px 0 10px; cursor:pointer">
+      <input type="checkbox" id="settings-full" style="width:auto" ${state.settingsFull ? "checked" : ""}/>
+      <span>Show all settings (everything, including defaults and user config)</span>
+    </label>` + simplified + full;
+
+  const toggle = document.getElementById("settings-full");
+  if (toggle) toggle.onchange = (e) => { state.settingsFull = e.target.checked; render(false); };
 }
 
 // ── drawer ──────────────────────────────────────────────────────────────────
@@ -437,6 +568,16 @@ document.addEventListener("click", (e) => {
     state.sort[id] = { i, dir: cur && cur.i === i && cur.dir === "asc" ? "desc" : "asc" };
     if (th.closest("#drawer") && state.drawerRender) state.drawerRender();
     else render(false);
+    return;
+  }
+  const info = e.target.closest("[data-info]");
+  if (info) {
+    const v = info.dataset.info;
+    state.descOpen[v] = !state.descOpen[v];
+    // Toggle in place so the reveal/collapse animates; state persists re-renders.
+    const desc = document.getElementById("desc-" + v);
+    if (desc) desc.classList.toggle("open", state.descOpen[v]);
+    info.classList.toggle("rotated", state.descOpen[v]);
     return;
   }
   const a = e.target.closest("[data-run],[data-test],[data-fail],[data-out],[data-cmd],[data-copy]");

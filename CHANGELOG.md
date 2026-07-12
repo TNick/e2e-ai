@@ -21,6 +21,12 @@ All notable changes to this project will be documented in this file.
 - Monitor tables are click-to-sort on any column (date/date-time columns sort by
   underlying value, not the displayed string), and Runs, Tests, and Agents add a
   status filter. Sort/filter choices persist across live refreshes.
+- Monitor Runs/Tests/Failures/Agents/Settings pages have an ⓘ info button next to
+  the title that reveals (with a transition, rotating the icon 15°) a description
+  of the page and every column and its special values.
+- Monitor Settings has a "Show all settings" toggle that reveals the full
+  effective configuration (defaults + user config + project config) via a new
+  read-only `GET /api/config` endpoint.
 - Broke an `isolation → integrations.fr_two → isolation` import cycle by loading
   the fr-two isolation backend lazily in the isolation registry.
 

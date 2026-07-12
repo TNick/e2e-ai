@@ -374,3 +374,31 @@ class TestMonitorConfig:
             tmp_path, ["--project-root", str(proj), "--port", "9333"], monkeypatch
         )
         assert cap["port"] == 9333
+
+
+# ── /api/config (Settings "everything") ──────────────────────────────────────
+class TestConfigEndpoint:
+    def test_config_unavailable_without_config(self, tmp_path):
+        client, _ = _client(tmp_path)
+        data = client.get("/api/config").json()
+        assert data["available"] is False
+        assert data["config"] is None
+
+    def test_config_available_when_passed(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        db = tmp_path / "state.sqlite3"
+        _seed(db)
+        app, *_ = build_monitor(
+            db_path=db,
+            project_root=tmp_path,
+            state_dir=tmp_path / ".e2e-ai",
+            project_id="demo",
+            host="127.0.0.1",
+            port=8765,
+            refresh_ms=1000,
+            config_full={"project_id": "demo", "isolation": {"backend": "none"}},
+        )
+        data = TestClient(app).get("/api/config").json()
+        assert data["available"] is True
+        assert data["config"]["isolation"]["backend"] == "none"
