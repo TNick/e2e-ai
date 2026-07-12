@@ -4,156 +4,75 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-12
+
 ### Added
 
-- Runs record the master repair-loop process PID; on startup, orphaned
-  ``running`` runs (missing PID or dead process) are marked ``stopped`` with
-  reason ``process interrupted``, and open attempts are marked ``interrupted``.
-  Pressing Ctrl+C during ``repair``, ``run``, or ``verify`` does the same for
-  the active run immediately.
-- ``e2e-ai cleanup --stale-runs`` to reconcile stale runs manually (also runs
-  automatically when opening the state database for repair/run/verify/discover/ui).
-- Monitor Tests page: **Runs** column shows total recorded executions per test,
-  with failure packet count in parentheses when non-zero (e.g. ``5 (2)``).
-- Monitor Tests detail drawer: failed attempts link to agent invocations
-  (planner / implementer / instrumenter) for that run; full agent history is
-  listed below the attempts table.
-
-- Monitor Agents page: click an invocation to open its repair plan (planner),
-  implementation log (implementer), or other agent output in the detail drawer.
-  New ``GET /api/agents/{id}`` endpoint serves plan text and log files.
-- ``e2e-ai repair --failed-only`` to repair only tests that did not pass in
-  the previous finished run.
-- Provider failover and multi-agent routing: per-role ordered provider pools
-  (`routing.role_preferences`), automatic rotation to the next configured
-  provider on retryable agent failures, per-invocation failover metadata in the
-  state database and monitor UI, and `routing.failover` policy controls.
-- Agent provider variants: configure multiple routable ids for one CLI via
-  `provider` plus optional `model_candidates` / `reasoning_effort`. Variants
-  resolve models from each CLI catalog at runtime and are skipped when no
-  candidate is available.
-- Project-level `routing.role_preferences` overrides in `e2e-ai.yml` so a
-  target repository can define its own Cursor-first or other failover order.
-- Agent plugin entries support optional `max_turns` to override Claude CLI
-  turn budgets per variant or plugin definition.
-- Opt-in live agent contract tests (`tests/live_agents_test.py`) gated by
-  `E2E_AI_LIVE_AGENT_TESTS` invoke real Codex, Claude, and Cursor CLIs through
-  the production plugin path.
-- Live agent invocation streaming: agent rows appear in the monitor while a CLI
-  is running (`status=running`, blank Finished column), with live log tailing in
-  the agent detail drawer via `GET /api/agents/{id}/output` and a Running agents
-  section on the Active page.
-- `e2e-ai repair --verbose-agents` streams concise agent progress lines to the
-  terminal while planner/implementer/instrumenter CLIs run.
-- Config-driven Docker runtime refresh: `target_runtime.refresh` declares named
-  Compose actions and path rules; after implementation e2e-ai diffs the git
-  worktree across the implementer failover sequence, runs matched actions (plus
-  valid implementer `runtime_refresh_actions` hints) before the next Playwright
-  attempt, waits for configured health checks, and writes a refresh report
-  artifact.
+- Runs record the master repair-loop process PID; on startup, orphaned ``running`` runs (missing PID or dead process) are marked ``stopped`` with reason ``process interrupted``, and open attempts are marked ``interrupted``. Pressing Ctrl+C during ``repair``, ``run``, or ``verify`` does the same for the active run immediately.
+- ``e2e-ai cleanup --stale-runs`` to reconcile stale runs manually (also runs automatically when opening the state database for repair/run/verify/discover/ui).
+- Monitor Tests page: **Runs** column shows total recorded executions per test, with failure packet count in parentheses when non-zero (e.g. ``5 (2)``).
+- Monitor Tests detail drawer: failed attempts link to agent invocations (planner / implementer / instrumenter) for that run; full agent history is listed below the attempts table.
+- Monitor Agents page: click an invocation to open its repair plan (planner), implementation log (implementer), or other agent output in the detail drawer. New ``GET /api/agents/{id}`` endpoint serves plan text and log files.
+- ``e2e-ai repair --failed-only`` to repair only tests that did not pass in the previous finished run.
+- Provider failover and multi-agent routing: per-role ordered provider pools (`routing.role_preferences`), automatic rotation to the next configured provider on retryable agent failures, per-invocation failover metadata in the state database and monitor UI, and `routing.failover` policy controls.
+- Agent provider variants: configure multiple routable ids for one CLI via `provider` plus optional `model_candidates` / `reasoning_effort`. Variants resolve models from each CLI catalog at runtime and are skipped when no candidate is available.
+- Project-level `routing.role_preferences` overrides in `e2e-ai.yml` so a target repository can define its own Cursor-first or other failover order.
+- Agent plugin entries support optional `max_turns` to override Claude CLI turn budgets per variant or plugin definition.
+- Opt-in live agent contract tests (`tests/live_agents_test.py`) gated by `E2E_AI_LIVE_AGENT_TESTS` invoke real Codex, Claude, and Cursor CLIs through the production plugin path.
+- Live agent invocation streaming: agent rows appear in the monitor while a CLI is running (`status=running`, blank Finished column), with live log tailing in the agent detail drawer via `GET /api/agents/{id}/output` and a Running agents section on the Active page.
+- `e2e-ai repair --verbose-agents` streams concise agent progress lines to the terminal while planner/implementer/instrumenter CLIs run.
+- Config-driven Docker runtime refresh: `target_runtime.refresh` declares named Compose actions and path rules; after implementation e2e-ai diffs the git worktree across the implementer failover sequence, runs matched actions (plus valid implementer `runtime_refresh_actions` hints) before the next Playwright attempt, waits for configured health checks, and writes a refresh report artifact.
 
 ### Changed
 
-- Implementer structured output now requires `runtime_refresh_actions`
-  (`string[]`); the prompt lists configured refresh action names when
-  `target_runtime.refresh` is present.
-- User config default for Claude sets ``max_turns: 40`` (double the built-in
-  planner default of 20); project configs are unchanged.
-- Agent invocation `started_at` and `finished_at` timestamps are recorded at
-  subprocess start and completion instead of both being set when the CLI exits.
-- Instrumentation escalation now counts only repair plans and repeated failure
-  signatures from the current run; a new run always gets a plan-and-implement
-  cycle before the instrumenter is invoked, even when prior runs left history.
-- Ruff line length aligned to the project standard (80 columns); `make delint`
-  and pre-commit now reformat code to that width instead of the previous
-  88-column default. Remaining overlong docstrings, SQL, and string literals
-  were wrapped manually so E501 is enforced in lint as well.
-- Monitor agent detail drawer formats Codex ``--json`` stdout as one card per
-  item, expands ``\\r\\n`` / ``\\n`` in command output, pretty-prints nested
-  planner JSON, and collapses long ``aggregated_output`` blocks.
-- Monitor agent detail drawer formats Cursor ``stream-json`` stdout the same
-  way: merged thinking blocks, one card per tool call (read/grep/plan with
-  collapsible output), collapsed user prompts, and session/result metadata.
-- Live agent log refresh no longer flickers between parsed and raw views:
-  format is locked by agent id (``codex_*``, ``cursor_*``), sticky for command
-  runs, streaming placeholder while JSONL lines are incomplete, and the global
-  tick no longer restarts an already-polling agent drawer.
-- Repair loop prints prior attempt history as ``(N runs, M failures)`` when a
-  test has been executed before (replacing the misleading ``(regression)`` /
-  ``(seen before)`` labels).
-- The repair loop prints `Starting Docker containers...` after scheduling when
-  Docker Compose startup is required, so long container bootstraps are easier
-  to understand.
-- fr-two example config uses Cursor-first per-role failover
-  (`cursor_auto` → model-specific Cursor variants → Claude → Codex) with
-  runtime model resolution for GPT and Composer variants.
+- Implementer structured output now requires `runtime_refresh_actions` (`string[]`); the prompt lists configured refresh action names when `target_runtime.refresh` is present.
+- User config default for Claude sets ``max_turns: 40`` (double the built-in planner default of 20); project configs are unchanged.
+- Agent invocation `started_at` and `finished_at` timestamps are recorded at subprocess start and completion instead of both being set when the CLI exits.
+- Instrumentation escalation now counts only repair plans and repeated failure signatures from the current run; a new run always gets a plan-and-implement cycle before the instrumenter is invoked, even when prior runs left history.
+- Ruff line length aligned to the project standard (80 columns); `make delint` and pre-commit now reformat code to that width instead of the previous 88-column default. Remaining overlong docstrings, SQL, and string literals were wrapped manually so E501 is enforced in lint as well.
+- Monitor agent detail drawer formats Codex ``--json`` stdout as one card per item, expands ``\\r\\n`` / ``\\n`` in command output, pretty-prints nested planner JSON, and collapses long ``aggregated_output`` blocks.
+- Monitor agent detail drawer formats Cursor ``stream-json`` stdout the same way: merged thinking blocks, one card per tool call (read/grep/plan with collapsible output), collapsed user prompts, and session/result metadata.
+- Live agent log refresh no longer flickers between parsed and raw views: format is locked by agent id (``codex_*``, ``cursor_*``), sticky for command runs, streaming placeholder while JSONL lines are incomplete, and the global tick no longer restarts an already-polling agent drawer.
+- Repair loop prints prior attempt history as ``(N runs, M failures)`` when a test has been executed before (replacing the misleading ``(regression)`` / ``(seen before)`` labels).
+- The repair loop prints `Starting Docker containers...` after scheduling when Docker Compose startup is required, so long container bootstraps are easier to understand.
+- fr-two example config uses Cursor-first per-role failover (`cursor_auto` → model-specific Cursor variants → Claude → Codex) with runtime model resolution for GPT and Composer variants.
+- Provider failover and multi-agent routing from the research plan
+- Print Starting Docker containers...
+- Multiple fixes
+- First fixed test
+- Format code
+- Major success with most of the tests
+- Stream work to UI. Restart docker when the code changes
+- Keep the running log stable
 
 ### Fixed
 
-- Agent exit classification no longer treats Claude's benign
-  `rate_limit_event` metadata as `quota_error` (word-boundary quota patterns).
-- Claude `error_max_turns` responses are classified as `max_turns_exceeded`
-  instead of `quota_error` or generic `task_failure`.
-- Cursor workspace-trust prompts are classified as `permission_denied` and
-  Cursor planner/instrumenter/implementer argv now always pass `--trust`
-  (implementer also passes `--force`).
-- Claude planner and instrumenter default turn budgets are raised (20 / 14) so
-  investigation-heavy repair prompts are less likely to hit `error_max_turns`.
-- Agent plugin model resolution no longer leaves a sentinel ``object()`` in
-  argv when no ``model_candidates`` are configured.
-- Successful agent invocations no longer show a misleading failover exit class
-  (for example `quota_error`) when agent logs mention rate limits or usage caps
-  but the process exited cleanly with status `ok`.
-- Monitor Agents list: status cells now use green for `ok` and red for `error`,
-  matching runs/tests coloring.
-- `e2e-ai repair --failed-only` now ignores previous empty bookkeeping runs and
-  no longer creates a new empty run when there are no failed tests to schedule.
-- Repair attempt budgets now apply to the current run, so historical failures
-  no longer cause `--failed-only` repairs to stop before invoking agents.
-- Agent subprocesses no longer inherit parent stdin for argument/file prompt
-  transports, and Codex now receives large repair prompts through an explicit
-  stdin pipe instead of fragile command-line arguments.
-- Regression failures can now escalate directly to instrumentation without
-  crashing the repair state machine.
-- Codex planner/implementer runs no longer fail on Windows when structured
-  output is enabled: JSON Schema is written to a temporary file for
-  ``codex exec --output-schema`` instead of passing inline JSON (which Codex
-  treats as a file path).
-- Codex instrumenter/implementer invocations no longer fail with
-  ``unexpected argument '--ask-for-approval'``: approval policy is passed
-  via ``-c approval_policy=...`` because current Codex CLI rejects the flag
-  after ``exec``.
-- Codex repair invocations use ``--ignore-user-config`` so personal MCP
-  servers from ``~/.codex/config.toml`` do not load during unattended runs;
-  Playwright MCP is layered through a per-invocation Codex profile instead.
-- Provider failover now re-classifies agent output when a stored exit class
-  is the generic ``task_failure``, so Codex usage-limit responses rotate to
-  the next configured provider (for example Claude) instead of stopping.
-- Logged-in agents with an unknown quota are now eligible as failover targets
-  after a provider reports quota exhaustion.
-- Claude planner, instrumenter, and implementer invocations now include
-  ``--verbose``, as required by Claude CLI when using ``stream-json`` output.
-- Cursor now receives repair prompts through stdin, avoiding Windows command
-  length failures for large failure packets and agent context.
-- When every planner provider exhausts its quota, repairs now stop as blocked
-  after the current failed test execution rather than rerunning unchanged code
-  and consuming the remaining repair-attempt budget.
-- Oversized planner output is compacted before it is embedded in implementer
-  prompts, preventing Codex from rejecting repair requests over its 1MiB input
-  limit.
-- Codex write-capable invocations on Windows use full access after the native
-  workspace-write and unelevated sandboxes reject required file edits; planner
-  invocations remain read-only.
-- Agent log files include a millisecond suffix so concurrent invocations no
-  longer overwrite each other's stdout logs.
-- Codex Playwright-MCP runtime directories are now removed as directories on
-  Windows, preventing repair runs from crashing during temporary-file cleanup.
-- Repair loop no longer crashes with an invalid `planning` → `rerun` state
-  transition when the planner agent fails after failover.
-- Monitor UI closes the detail drawer when navigating to a different page, so
-  run/test/failure details no longer cover the new view.
-- Monitor Tests **Runs** column now stays in sync with attempt history (counts
-  refresh while the detail drawer is open and when opening a test detail).
+- Agent exit classification no longer treats Claude's benign `rate_limit_event` metadata as `quota_error` (word-boundary quota patterns).
+- Claude `error_max_turns` responses are classified as `max_turns_exceeded` instead of `quota_error` or generic `task_failure`.
+- Cursor workspace-trust prompts are classified as `permission_denied` and Cursor planner/instrumenter/implementer argv now always pass `--trust` (implementer also passes `--force`).
+- Claude planner and instrumenter default turn budgets are raised (20 / 14) so investigation-heavy repair prompts are less likely to hit `error_max_turns`.
+- Agent plugin model resolution no longer leaves a sentinel ``object()`` in argv when no ``model_candidates`` are configured.
+- Successful agent invocations no longer show a misleading failover exit class (for example `quota_error`) when agent logs mention rate limits or usage caps but the process exited cleanly with status `ok`.
+- Monitor Agents list: status cells now use green for `ok` and red for `error`, matching runs/tests coloring.
+- `e2e-ai repair --failed-only` now ignores previous empty bookkeeping runs and no longer creates a new empty run when there are no failed tests to schedule.
+- Repair attempt budgets now apply to the current run, so historical failures no longer cause `--failed-only` repairs to stop before invoking agents.
+- Agent subprocesses no longer inherit parent stdin for argument/file prompt transports, and Codex now receives large repair prompts through an explicit stdin pipe instead of fragile command-line arguments.
+- Regression failures can now escalate directly to instrumentation without crashing the repair state machine.
+- Codex planner/implementer runs no longer fail on Windows when structured output is enabled: JSON Schema is written to a temporary file for ``codex exec --output-schema`` instead of passing inline JSON (which Codex treats as a file path).
+- Codex instrumenter/implementer invocations no longer fail with ``unexpected argument '--ask-for-approval'``: approval policy is passed via ``-c approval_policy=...`` because current Codex CLI rejects the flag after ``exec``.
+- Codex repair invocations use ``--ignore-user-config`` so personal MCP servers from ``~/.codex/config.toml`` do not load during unattended runs; Playwright MCP is layered through a per-invocation Codex profile instead.
+- Provider failover now re-classifies agent output when a stored exit class is the generic ``task_failure``, so Codex usage-limit responses rotate to the next configured provider (for example Claude) instead of stopping.
+- Logged-in agents with an unknown quota are now eligible as failover targets after a provider reports quota exhaustion.
+- Claude planner, instrumenter, and implementer invocations now include ``--verbose``, as required by Claude CLI when using ``stream-json`` output.
+- Cursor now receives repair prompts through stdin, avoiding Windows command length failures for large failure packets and agent context.
+- When every planner provider exhausts its quota, repairs now stop as blocked after the current failed test execution rather than rerunning unchanged code and consuming the remaining repair-attempt budget.
+- Oversized planner output is compacted before it is embedded in implementer prompts, preventing Codex from rejecting repair requests over its 1MiB input limit.
+- Codex write-capable invocations on Windows use full access after the native workspace-write and unelevated sandboxes reject required file edits; planner invocations remain read-only.
+- Agent log files include a millisecond suffix so concurrent invocations no longer overwrite each other's stdout logs.
+- Codex Playwright-MCP runtime directories are now removed as directories on Windows, preventing repair runs from crashing during temporary-file cleanup.
+- Repair loop no longer crashes with an invalid `planning` → `rerun` state transition when the planner agent fails after failover.
+- Monitor UI closes the detail drawer when navigating to a different page, so run/test/failure details no longer cover the new view.
+- Monitor Tests **Runs** column now stays in sync with attempt history (counts refresh while the detail drawer is open and when opening a test detail).
 
 ## [0.1.3] - 2026-07-12
 
@@ -206,10 +125,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Monitor Tests **Runs** column now matches attempt history: counts use a joined
-  aggregate query, refresh while the detail drawer is open, and update when a
-  test detail is opened.
-
+- Monitor Tests **Runs** column now matches attempt history: counts use a joined aggregate query, refresh while the detail drawer is open, and update when a test detail is opened.
 - Monitor dashboard no longer flickers every second: auto-refresh is gated on the state revision and skips the loading placeholder, so an idle view stays put.
 - Launching a command from the monitor now transitions the open drawer straight to the command output, instead of briefly flashing the Commands page first.
 - Monitor navigation now uses hash routing, so the browser address bar reflects the current page (`#active`, `#runs`, …) and back/forward and deep links work.
@@ -245,4 +161,5 @@ All notable changes to this project will be documented in this file.
 [0.1.1]: https://github.com/TNick/e2e-ai/compare/0816d060c8d69ee8f8a0b9fd374f6ac9a8248212...v0.1.1
 [0.1.2]: https://github.com/TNick/e2e-ai/compare/v0.1.1...v0.1.2
 [0.1.3]: https://github.com/TNick/e2e-ai/compare/v0.1.2...v0.1.3
-[unreleased]: https://github.com/TNick/e2e-ai/compare/v0.1.3...HEAD
+[0.1.4]: https://github.com/TNick/e2e-ai/compare/v0.1.3...v0.1.4
+[unreleased]: https://github.com/TNick/e2e-ai/compare/v0.1.4...HEAD
