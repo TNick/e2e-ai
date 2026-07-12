@@ -61,3 +61,16 @@ class TestSchema:
             assert current_schema_version(second) == SCHEMA_VERSION
         finally:
             second.close()
+
+    def test_schema_includes_failover_columns(self, tmp_path: Path) -> None:
+        conn = ensure_database(tmp_path / "state.sqlite3")
+        try:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(agent_invocations)")
+            }
+            assert "provider_order_json" in columns
+            assert "exit_class" in columns
+            assert "switch_reason" in columns
+            assert "failover_retry" in columns
+        finally:
+            conn.close()

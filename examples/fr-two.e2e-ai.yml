@@ -148,8 +148,8 @@ agents:
     plugin: codex
     profile: difficult
   implementer:
-    plugin: codex
+    plugin: claude
     profile: normal
   instrumenter:
-    plugin: codex
+    plugin: cursor
     profile: difficult

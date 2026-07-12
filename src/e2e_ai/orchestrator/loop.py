@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import subprocess
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -13,6 +14,13 @@ from pathlib import Path
 
 from ..agents.base import AgentPlugin
 from ..agents.registry import AgentRegistry
+from ..agents.role_agent import bind_role
+from ..agents.router import ROLE_TASK_CLASS, ProviderSelection, select_provider
+from ..agents.routing_outcomes import (
+    RoutingAction,
+    classify_invocation_exit,
+    decide_routing_action,
+)
 from ..analysis import (
     build_failure_packet,
     build_repair_context,
@@ -96,6 +104,47 @@ logger = logging.getLogger(__name__)
 Reporter = Callable[[str], None]
 
 DEFAULT_AGENT_TIMEOUT_SECONDS = 1800
+
+
+@dataclass
+class FailoverTracker:
+    """Per-test provider failover state for the current repair run."""
+
+    switch_count: int = 0
+    failed_by_role: dict[str, set[str]] = field(default_factory=dict)
+    schema_retries: dict[str, int] = field(default_factory=dict)
+
+    def failed_providers(self, role: str) -> set[str]:
+        return self.failed_by_role.setdefault(role, set())
+
+    def mark_failed(self, role: str, provider_id: str) -> None:
+        self.failed_by_role.setdefault(role, set()).add(provider_id)
+        self.switch_count += 1
+
+    def can_switch(self, config: EffectiveConfig) -> bool:
+        limit = config.routing.failover.max_switches_per_test
+        if limit <= 0:
+            return True
+        return self.switch_count < limit
+
+    def schema_retries_left(self, role: str, config: EffectiveConfig) -> int:
+        used = self.schema_retries.get(role, 0)
+        return max(0, config.routing.schema_retry_limit - used)
+
+    def consume_schema_retry(self, role: str) -> None:
+        self.schema_retries[role] = self.schema_retries.get(role, 0) + 1
+
+
+@dataclass
+class AgentInvocationOutcome:
+    """Result of invoking a role with optional provider failover."""
+
+    text: str
+    ok: bool
+    mcp_error: str | None = None
+    agent_id: str | None = None
+    routing_action: RoutingAction | None = None
+    exit_class: str | None = None
 
 
 class TestResult(StrEnum):
@@ -336,6 +385,36 @@ def _build_packet(
     )
 
 
+def _working_tree_changed(project_root: Path) -> bool:
+    """Return whether the git working tree has local modifications."""
+
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.log(
+            1,
+            "could not inspect git status for noop detection: %s",
+            exc,
+            exc_info=True,
+        )
+        return True
+    if result.returncode != 0:
+        logger.log(
+            1,
+            "git status returned %d during noop detection",
+            result.returncode,
+        )
+        return True
+    return bool(result.stdout.strip())
+
+
 def _new_agent_invocation_id() -> str:
     return f"agent_{uuid.uuid4().hex[:16]}"
 
@@ -353,7 +432,7 @@ def _append_mcp_prompt(
     return prompt
 
 
-def _invoke_agent(
+def _invoke_agent_once(
     registry: AgentRegistry,
     role: str,
     prompt: str,
@@ -365,15 +444,23 @@ def _invoke_agent(
     log_dir: Path,
     context,
     lease: EnvironmentLease | None,
-    plugin: AgentPlugin,
-) -> tuple[str, bool, str | None]:
-    agent = registry.role(role)
+    plugin_id: str,
+    selection: ProviderSelection,
+    switch_reason: str | None = None,
+) -> tuple[str, bool, str | None, str, str | None]:
+    agent = bind_role(
+        config,
+        role,
+        registry._plugins,  # noqa: SLF001
+        plugin_id=plugin_id,
+    )
     timeout = min(
         DEFAULT_AGENT_TIMEOUT_SECONDS,
         config.repair_policy.max_agent_seconds,
     )
     invocation_id = _new_agent_invocation_id()
     mcp: AgentMcpAttachment | None = None
+    plugin = registry._plugins.get(plugin_id)  # noqa: SLF001
     if lease is not None and plugin is not None:
         supports = False
         if hasattr(plugin, "supports_playwright_mcp"):
@@ -392,6 +479,8 @@ def _invoke_agent(
                 "",
                 False,
                 "mcp_required:%s" % (mcp.degraded_reason or "setup failed"),
+                agent.id,
+                None,
             )
     full_prompt = _append_mcp_prompt(prompt, context=context, mcp=mcp)
     run = agent.run(
@@ -408,21 +497,191 @@ def _invoke_agent(
             mcp.session,
             keep=config.playwright_mcp.keep_artifacts_on_failure or not run.ok,
         )
+    text = run.stdout.strip()
+    if not text:
+        text = f"(agent produced no output; exit={run.exit_code})"
+    noop = (
+        role == "implementer"
+        and run.ok
+        and not _working_tree_changed(config.project_root)
+    )
+    exit_class = classify_invocation_exit(
+        run,
+        role=role,
+        config=config,
+        plan_text=text if role in {"planner", "instrumenter"} else None,
+        noop_implementation=noop,
+    )
     record_agent_invocation(
         conn,
         run_id=run_id,
         role=role,
         agent_id=agent.id,
         command=[agent.id, invocation_id],
-        status="ok" if run.ok else "error",
+        status="ok" if run.ok and not noop else "error",
         exit_code=run.exit_code,
         test_id=test_id,
         stdout_path=str(run.output_path) if run.output_path else None,
+        provider_order=list(selection.provider_order),
+        exit_class=exit_class,
+        switch_reason=switch_reason,
+        failover_retry=selection.failover_retry,
     )
-    text = run.stdout.strip()
-    if not text:
-        text = f"(agent produced no output; exit={run.exit_code})"
-    return text, run.ok, None
+    invocation_ok = run.ok and not noop
+    return text, invocation_ok, None, agent.id, exit_class
+
+
+def _invoke_role_with_failover(
+    registry: AgentRegistry,
+    role: str,
+    prompt: str,
+    *,
+    config: EffectiveConfig,
+    run_id: str,
+    test_id: str,
+    conn: sqlite3.Connection,
+    log_dir: Path,
+    context,
+    lease: EnvironmentLease | None,
+    failover: FailoverTracker,
+    external_blocker: bool = False,
+) -> AgentInvocationOutcome:
+    task_class = ROLE_TASK_CLASS.get(role, "normal")
+    plugins = registry._plugins  # noqa: SLF001
+    last_agent_id: str | None = None
+    last_exit_class: str | None = None
+
+    while True:
+        excluded = failover.failed_providers(role)
+        try:
+            selection = select_provider(
+                config,
+                role,
+                task_class,
+                plugins,
+                excluded=excluded,
+                failover_retry=bool(excluded),
+            )
+        except Exception as exc:
+            from ..errors import AgentError
+
+            if isinstance(exc, AgentError):
+                return AgentInvocationOutcome(
+                    text=str(exc),
+                    ok=False,
+                    agent_id=last_agent_id,
+                    routing_action=RoutingAction.STOP_TEST,
+                    exit_class=last_exit_class,
+                )
+            raise
+
+        text, ok, mcp_err, agent_id, exit_class = _invoke_agent_once(
+            registry,
+            role,
+            prompt,
+            config=config,
+            run_id=run_id,
+            test_id=test_id,
+            conn=conn,
+            log_dir=log_dir,
+            context=context,
+            lease=lease,
+            plugin_id=selection.selected_provider,
+            selection=selection,
+            switch_reason=(
+                f"failover from {sorted(excluded)[-1]}" if excluded else None
+            ),
+        )
+        last_agent_id = agent_id
+        last_exit_class = exit_class
+
+        if mcp_err:
+            return AgentInvocationOutcome(
+                text=text,
+                ok=False,
+                mcp_error=mcp_err,
+                agent_id=agent_id,
+                routing_action=RoutingAction.EXTERNAL_BLOCKER,
+                exit_class=exit_class,
+            )
+
+        if ok:
+            return AgentInvocationOutcome(
+                text=text,
+                ok=True,
+                agent_id=agent_id,
+                routing_action=RoutingAction.SUCCESS,
+                exit_class=exit_class,
+            )
+
+        pool = list(selection.provider_order)
+        failed = failover.failed_providers(role) | {selection.selected_provider}
+        providers_remaining = any(provider not in failed for provider in pool)
+        action = decide_routing_action(
+            exit_class or "task_failure",
+            config=config,
+            external_blocker=external_blocker,
+            same_provider_retries_left=failover.schema_retries_left(role, config),
+            providers_remaining=providers_remaining,
+            switches_remaining=failover.can_switch(config),
+        )
+
+        if action is RoutingAction.RETRY_SAME_PROVIDER:
+            failover.consume_schema_retry(role)
+            continue
+
+        if action is RoutingAction.SWITCH_PROVIDER:
+            if not providers_remaining or not failover.can_switch(config):
+                return AgentInvocationOutcome(
+                    text=text,
+                    ok=False,
+                    agent_id=agent_id,
+                    routing_action=RoutingAction.STOP_TEST,
+                    exit_class=exit_class,
+                )
+            failover.mark_failed(role, selection.selected_provider)
+            continue
+
+        return AgentInvocationOutcome(
+            text=text,
+            ok=False,
+            agent_id=agent_id,
+            routing_action=action,
+            exit_class=exit_class,
+        )
+
+
+def _invoke_agent(
+    registry: AgentRegistry,
+    role: str,
+    prompt: str,
+    *,
+    config: EffectiveConfig,
+    run_id: str,
+    test_id: str,
+    conn: sqlite3.Connection,
+    log_dir: Path,
+    context,
+    lease: EnvironmentLease | None,
+    plugin: AgentPlugin,
+    failover: FailoverTracker | None = None,
+) -> tuple[str, bool, str | None]:
+    _ = plugin
+    tracker = failover or FailoverTracker()
+    outcome = _invoke_role_with_failover(
+        registry,
+        role,
+        prompt,
+        config=config,
+        run_id=run_id,
+        test_id=test_id,
+        conn=conn,
+        log_dir=log_dir,
+        context=context,
+        lease=lease,
+        failover=tracker,
+    )
+    return outcome.text, outcome.ok, outcome.mcp_error
 
 
 def handle_failed_attempt(
@@ -437,21 +696,16 @@ def handle_failed_attempt(
     repair_state: TestRepairState,
     dry_run_agents: bool = False,
     lease: EnvironmentLease | None = None,
+    failover: FailoverTracker | None = None,
 ) -> RepairDecision:
     """Plan, implement, instrument, or stop after a failed attempt."""
 
+    _ = agents
+    tracker = failover or FailoverTracker()
     policy = config.repair_policy
     context = trim_repair_context(
         build_repair_context(conn, packet, test=test, config=config)
     )
-
-    def plugin_for(role):
-        return registry.role(role)
-
-    planner_plugin = registry._plugins.get(  # noqa: SLF001
-        plugin_for("planner").id
-    )
-    implementer_plugin = registry._plugins.get(plugin_for("implementer").id)
 
     if classify_external_blocker(packet, config=config):
         return RepairDecision(
@@ -497,7 +751,8 @@ def handle_failed_attempt(
             log_dir=log_dir,
             context=context,
             lease=lease,
-            plugin=registry._plugins.get(registry.role("instrumenter").id),
+            plugin=registry._plugins.get(registry.role("instrumenter").id),  # noqa: SLF001
+            failover=tracker,
         )
         if mcp_err:
             return RepairDecision(
@@ -538,7 +793,8 @@ def handle_failed_attempt(
         log_dir=log_dir,
         context=context,
         lease=lease,
-        plugin=planner_plugin,
+        plugin=registry._plugins.get(registry.role("planner").id),  # noqa: SLF001
+        failover=tracker,
     )
     if mcp_err:
         return RepairDecision(
@@ -547,6 +803,15 @@ def handle_failed_attempt(
             stop_run=True,
             reason=mcp_err,
         )
+
+    if not ok:
+        repair_state.note = "planner agent failed after provider failover"
+        return RepairDecision(
+            action="rerun",
+            next_state=STATE_FAILED,
+            reason=repair_state.note,
+        )
+
     _transition(repair_state, EVENT_PLAN_CREATED)
 
     blocked = plan_is_blocked(plan_text)
@@ -580,7 +845,8 @@ def handle_failed_attempt(
         log_dir=log_dir,
         context=context,
         lease=lease,
-        plugin=implementer_plugin,
+        plugin=registry._plugins.get(registry.role("implementer").id),  # noqa: SLF001
+        failover=tracker,
     )
     if impl_mcp_err:
         return RepairDecision(
@@ -632,6 +898,7 @@ def run_one_test_until_resolved(
     attempt_budget = max(1, config.repair_policy.max_attempts_per_test)
     attempt_index = 0
     lease = None
+    failover = FailoverTracker()
 
     for attempt in range(attempt_budget):
         if repair_state.state == STATE_PENDING:
@@ -720,6 +987,7 @@ def run_one_test_until_resolved(
             repair_state=repair_state,
             dry_run_agents=dry_run_agents,
             lease=lease,
+            failover=failover,
         )
 
         if decision.dry_run_prompt:

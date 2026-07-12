@@ -41,6 +41,13 @@ agents:
 routing:
   allow_canary: false
   long_task_min_remaining_percent: 25
+  role_preferences:
+    planner: [codex, claude, cursor]
+    implementer: [claude, codex, cursor]
+    instrumenter: [cursor, claude, codex]
+  failover:
+    enabled: true
+    max_switches_per_test: 6
 """
 
 DEFAULT_PROJECT_CONFIG_YAML = """\

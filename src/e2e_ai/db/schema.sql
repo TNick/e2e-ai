@@ -96,6 +96,10 @@ CREATE TABLE agent_invocations (
     exit_code INTEGER,
     stdout_path TEXT,
     stderr_path TEXT,
+    provider_order_json TEXT,
+    exit_class TEXT,
+    switch_reason TEXT,
+    failover_retry INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(run_id) REFERENCES runs(id)
 );
 

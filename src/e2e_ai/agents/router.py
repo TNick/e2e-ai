@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 
 from ..config.models import AgentConfig, EffectiveConfig
 from ..errors import AgentError, AgentNotLoggedInError
@@ -25,6 +26,17 @@ ROLE_PREFER = {
 }
 
 
+@dataclass
+class ProviderSelection:
+    """Metadata for one provider selection attempt."""
+
+    role: str
+    selected_provider: str
+    provider_order: tuple[str, ...] = field(default_factory=tuple)
+    skipped_providers: dict[str, str] = field(default_factory=dict)
+    failover_retry: bool = False
+
+
 def _role_assignment(
     config: EffectiveConfig,
     role: str,
@@ -33,6 +45,35 @@ def _role_assignment(
         if agent.id == role and agent.plugin is not None:
             return agent
     return None
+
+
+def _role_preferences(
+    config: EffectiveConfig,
+    role: str,
+) -> tuple[str, ...]:
+    prefs = config.routing.role_preferences
+    explicit = getattr(prefs, role, ())
+    if explicit:
+        return explicit
+    assignment = _role_assignment(config, role)
+    if assignment is None or not assignment.plugin:
+        return ()
+    primary = assignment.plugin
+    preferred = ROLE_PREFER.get(role, ())
+    ordered = [primary] + [pid for pid in preferred if pid != primary]
+    return tuple(ordered)
+
+
+def provider_pool(
+    config: EffectiveConfig,
+    role: str,
+) -> tuple[str, ...]:
+    """Return the ordered provider pool for a loop role."""
+
+    pool = _role_preferences(config, role)
+    if not pool:
+        raise AgentError(f"no agent configured for role {role!r}")
+    return pool
 
 
 def _plugin_config(
@@ -45,6 +86,17 @@ def _plugin_config(
     return AgentConfig(id=plugin_id, enabled=True)
 
 
+def configured_provider_ids(config: EffectiveConfig) -> list[str]:
+    """Return distinct provider ids referenced by role pools."""
+
+    ids: list[str] = []
+    for role in ("planner", "implementer", "instrumenter"):
+        for provider in provider_pool(config, role):
+            if provider not in ids:
+                ids.append(provider)
+    return ids
+
+
 def check_required_agents(
     config: EffectiveConfig,
     plugins: dict[str, AgentPlugin],
@@ -53,15 +105,11 @@ def check_required_agents(
 
     checked: list[AgentHealth] = []
     seen: set[str] = set()
-    for role in ("planner", "implementer", "instrumenter"):
-        assignment = _role_assignment(config, role)
-        if assignment is None or not assignment.plugin:
+    for provider_id in configured_provider_ids(config):
+        if provider_id in seen or provider_id not in plugins:
             continue
-        plugin_id = assignment.plugin
-        if plugin_id in seen or plugin_id not in plugins:
-            continue
-        seen.add(plugin_id)
-        checked.append(plugins[plugin_id].check_login())
+        seen.add(provider_id)
+        checked.append(plugins[provider_id].check_login())
     return checked
 
 
@@ -104,6 +152,73 @@ def _score_candidate(
     return score
 
 
+def select_provider(
+    config: EffectiveConfig,
+    role: str,
+    task_class: str,
+    plugins: dict[str, AgentPlugin],
+    *,
+    excluded: set[str] | None = None,
+    failover_retry: bool = False,
+) -> ProviderSelection:
+    """Select the next provider for a loop role."""
+
+    pool = provider_pool(config, role)
+    excluded = excluded or set()
+    require_schema = config.routing.planner_requires_schema and role in {
+        "planner",
+        "instrumenter",
+    }
+    skipped: dict[str, str] = {}
+    candidates: list[tuple[int, str, AgentPlugin]] = []
+
+    for candidate_id in pool:
+        if candidate_id in excluded:
+            skipped[candidate_id] = "already failed for this repair attempt"
+            continue
+        plugin = plugins.get(candidate_id)
+        if plugin is None:
+            skipped[candidate_id] = "plugin disabled or unavailable"
+            continue
+        score = _score_candidate(
+            plugin,
+            task_class=task_class,
+            require_schema=require_schema,
+            routing_allow_unknown=config.routing.allow_canary,
+        )
+        if score < 0:
+            skipped[candidate_id] = "unhealthy or unavailable"
+            continue
+        candidates.append((score, candidate_id, plugin))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    if not candidates:
+        raise AgentError(
+            f"no healthy agent available for role {role!r} (task_class={task_class})"
+        )
+
+    chosen_id = candidates[0][1]
+    chosen = candidates[0][2]
+    snapshot = chosen.quota(task_class)
+    reserve_quota(chosen.id, task_class, snapshot)
+    logger.log(
+        1,
+        "selected agent %s for role %s task_class=%s quota=%s failover_retry=%s",
+        chosen.id,
+        role,
+        task_class,
+        snapshot.state,
+        failover_retry,
+    )
+    return ProviderSelection(
+        role=role,
+        selected_provider=chosen_id,
+        provider_order=pool,
+        skipped_providers=skipped,
+        failover_retry=failover_retry,
+    )
+
+
 def select_agent(
     config: EffectiveConfig,
     role: str,
@@ -112,59 +227,17 @@ def select_agent(
 ) -> AgentPlugin:
     """Select an agent for planner, implementer, or instrumenter role."""
 
-    assignment = _role_assignment(config, role)
-    if assignment is None or not assignment.plugin:
-        raise AgentError(f"no agent configured for role {role!r}")
-
-    plugin_id = assignment.plugin
-    if plugin_id not in plugins:
-        raise AgentError(f"unknown or disabled agent {plugin_id!r} for role {role!r}")
-
-    require_schema = config.routing.planner_requires_schema and role in {
-        "planner",
-        "instrumenter",
-    }
-    preferred = ROLE_PREFER.get(role, ())
-    candidates: list[tuple[int, str, AgentPlugin]] = []
-    ordered = [plugin_id] + [pid for pid in preferred if pid != plugin_id]
-    for candidate_id in ordered:
-        plugin = plugins.get(candidate_id)
-        if plugin is None:
-            continue
-        score = _score_candidate(
-            plugin,
-            task_class=task_class,
-            require_schema=require_schema,
-            routing_allow_unknown=config.routing.allow_canary,
-        )
-        candidates.append((score, candidate_id, plugin))
-
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    if not candidates or candidates[0][0] < 0:
+    selection = select_provider(config, role, task_class, plugins)
+    plugin = plugins.get(selection.selected_provider)
+    if plugin is None:
         raise AgentError(
-            f"no healthy agent available for role {role!r} (task_class={task_class})"
+            f"unknown or disabled agent {selection.selected_provider!r} "
+            f"for role {role!r}"
         )
-
-    chosen = candidates[0][2]
-    snapshot = chosen.quota(task_class)
-    reserve_quota(chosen.id, task_class, snapshot)
-    logger.log(
-        1,
-        "selected agent %s for role %s task_class=%s quota=%s",
-        chosen.id,
-        role,
-        task_class,
-        snapshot.state,
-    )
-    return chosen
+    return plugin
 
 
 def selected_plugin_ids(config: EffectiveConfig) -> list[str]:
     """Return distinct plugin ids referenced by loop roles."""
 
-    ids: list[str] = []
-    for role in ("planner", "implementer", "instrumenter"):
-        assignment = _role_assignment(config, role)
-        if assignment and assignment.plugin and assignment.plugin not in ids:
-            ids.append(assignment.plugin)
-    return ids
+    return configured_provider_ids(config)

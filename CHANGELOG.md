@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Provider failover and multi-agent routing: per-role ordered provider pools
+  (`routing.role_preferences`), automatic rotation to the next configured
+  provider on retryable agent failures, per-invocation failover metadata in the
+  state database and monitor UI, and `routing.failover` policy controls.
+
+### Changed
+
+- fr-two example config assigns planner to Codex, implementer to Claude, and
+  instrumenter to Cursor so local runs exercise all three providers.
+
 ## [0.1.3] - 2026-07-12
 
 ### Changed

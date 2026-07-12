@@ -128,13 +128,29 @@ class _FakeAgent:
         self.calls: list[str] = []
 
     def check_login(self):
-        raise NotImplementedError
+        from e2e_ai.agents.capabilities import QUOTA_READY, AgentHealth
+
+        return AgentHealth(
+            agent_id=self.id,
+            logged_in=True,
+            verified=True,
+            state=QUOTA_READY,
+        )
 
     def discover(self):
-        raise NotImplementedError
+        from e2e_ai.agents.capabilities import AgentCapabilities
+
+        return AgentCapabilities(plugin_id=self.id, schema_mode=True)
 
     def quota(self, task_class: str):
-        raise NotImplementedError
+        from e2e_ai.agents.capabilities import QUOTA_READY
+        from e2e_ai.agents.quota import QuotaSnapshot
+
+        _ = task_class
+        return QuotaSnapshot(plugin_id=self.id, state=QUOTA_READY)
+
+    def supports_playwright_mcp(self) -> bool:
+        return False
 
     def plan(self, request):
         self.calls.append(request.prompt)
@@ -188,6 +204,7 @@ class _FakeRegistry:
             "implementer": _LegacyBound(self._plugins["codex"]),
             "instrumenter": _LegacyBound(self._plugins["claude-strong"]),
         }
+        self._config = None
 
     def role(self, role: str):
         return self.agents[role]
@@ -261,6 +278,7 @@ class TestLoop:
         config = _config(tmp_path)
         conn = _seeded_conn(config)
         registry = _FakeRegistry()
+        registry._config = config
         outcomes = [(True, None)]
 
         def fake(config, request, **kwargs):
@@ -340,7 +358,10 @@ class TestLoop:
             registry=registry,
         )
         assert state.state == "exhausted_attempts"
-        assert registry._plugins["claude-strong"].calls
+        assert any(
+            "instrumentation agent" in call
+            for call in registry._plugins["claude"].calls
+        )
         conn.close()
 
     def test_regression_gets_previous_failure_context(self, tmp_path, monkeypatch):

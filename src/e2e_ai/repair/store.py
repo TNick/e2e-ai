@@ -208,14 +208,19 @@ class RepairStore:
         stdout_path: str | None = None,
         stderr_path: str | None = None,
         started_at: str | None = None,
+        provider_order: list[str] | None = None,
+        exit_class: str | None = None,
+        switch_reason: str | None = None,
+        failover_retry: bool = False,
     ) -> str:
         invocation_id = _new_id("agent")
         self._conn.execute(
             """
             INSERT INTO agent_invocations (
                 id, run_id, test_id, role, agent_id, command_json, status,
-                started_at, finished_at, exit_code, stdout_path, stderr_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                started_at, finished_at, exit_code, stdout_path, stderr_path,
+                provider_order_json, exit_class, switch_reason, failover_retry
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 invocation_id,
@@ -230,6 +235,10 @@ class RepairStore:
                 exit_code,
                 stdout_path,
                 stderr_path,
+                json.dumps(provider_order) if provider_order is not None else None,
+                exit_class,
+                switch_reason,
+                1 if failover_retry else 0,
             ),
         )
         self._commit()

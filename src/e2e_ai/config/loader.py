@@ -24,6 +24,7 @@ from .models import (
     CommandSpec,
     DockerComposeRuntimeConfig,
     EffectiveConfig,
+    FailoverConfig,
     FullVerificationConfig,
     IsolationConfig,
     MonitorConfig,
@@ -32,6 +33,7 @@ from .models import (
     PostgresIsolationConfig,
     ProjectConfig,
     RepairPolicy,
+    RolePreferencesConfig,
     RoutingConfig,
     RuntimeHealthCheckConfig,
     RuntimeStartConfig,
@@ -410,6 +412,43 @@ def _parse_exclude_patterns(data: object) -> tuple[str, ...]:
     return tuple(str(item) for item in tests)
 
 
+def _parse_role_preferences(data: object) -> RolePreferencesConfig:
+    if data is None:
+        return RolePreferencesConfig()
+    mapping = _require_mapping(data, "routing.role_preferences")
+    prefs = RolePreferencesConfig()
+    for role in ("planner", "implementer", "instrumenter"):
+        raw = mapping.get(role)
+        if raw is None:
+            continue
+        if not isinstance(raw, list):
+            raise ConfigError(f"routing.role_preferences.{role} must be a list")
+        setattr(prefs, role, tuple(str(item) for item in raw))
+    return prefs
+
+
+def _parse_failover_config(data: object) -> FailoverConfig:
+    if data is None:
+        return FailoverConfig()
+    mapping = _require_mapping(data, "routing.failover")
+    defaults = FailoverConfig()
+    retryable = mapping.get("retryable_exit_classes")
+    retryable_classes: tuple[str, ...] = ()
+    if retryable is not None:
+        if not isinstance(retryable, list):
+            raise ConfigError("routing.failover.retryable_exit_classes must be a list")
+        retryable_classes = tuple(str(item) for item in retryable)
+    max_switches = mapping.get(
+        "max_switches_per_test",
+        defaults.max_switches_per_test,
+    )
+    return FailoverConfig(
+        enabled=bool(mapping.get("enabled", defaults.enabled)),
+        retryable_exit_classes=retryable_classes,
+        max_switches_per_test=int(max_switches),
+    )
+
+
 def _parse_routing_config(data: object) -> RoutingConfig:
     if data is None:
         return RoutingConfig()
@@ -423,6 +462,8 @@ def _parse_routing_config(data: object) -> RoutingConfig:
         long_task_min_remaining_percent=int(
             mapping.get("long_task_min_remaining_percent", 25)
         ),
+        role_preferences=_parse_role_preferences(mapping.get("role_preferences")),
+        failover=_parse_failover_config(mapping.get("failover")),
     )
 
 

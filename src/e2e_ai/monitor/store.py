@@ -15,7 +15,7 @@ from typing import Any
 from ..errors import E2eAiError
 
 # Schema version the monitor understands (see e2e_ai/db/migrations.py).
-EXPECTED_SCHEMA_VERSION = 1
+EXPECTED_SCHEMA_VERSION = 2
 
 _MISSING_DB_MESSAGE = (
     "No state database found. Run `e2e-ai discover` or `e2e-ai repair` first."
@@ -176,6 +176,9 @@ class MonitorStore:
         )
         for agent in agents:
             agent["command"] = _decode_json(agent.pop("command_json", None))
+            agent["provider_order"] = _decode_json(
+                agent.pop("provider_order_json", None)
+            )
         attempt_ids = [a["id"] for a in attempts]
         failures = []
         if attempt_ids:
@@ -245,6 +248,7 @@ class MonitorStore:
         )
         for row in rows:
             row["command"] = _decode_json(row.pop("command_json", None))
+            row["provider_order"] = _decode_json(row.pop("provider_order_json", None))
             row.pop("quota_snapshot_json", None)
         return rows
 

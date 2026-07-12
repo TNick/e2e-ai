@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..config.models import EffectiveConfig
+from ..errors import AgentError
 from ..mcp.models import AgentMcpAttachment
 from .base import AgentPlugin, AgentRunResult, LoginStatus
 from .router import ROLE_TASK_CLASS, select_agent
@@ -77,18 +78,36 @@ class RoleBoundAgent:
                 mcp=mcp,
             )
             result = self._plugin.plan(request)
-        return result.to_agent_run_result()
+        return AgentRunResult(
+            agent_id=result.agent_id,
+            exit_code=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            output_path=result.output_path,
+            timed_out=result.timed_out,
+            exit_class=result.exit_class,
+            schema_valid=result.schema_valid,
+        )
 
 
 def bind_role(
     config: EffectiveConfig,
     role: str,
     plugins: dict,
+    *,
+    plugin_id: str | None = None,
 ) -> RoleBoundAgent:
     """Select and bind an agent plugin to a loop role."""
 
     task_class = ROLE_TASK_CLASS.get(role, "normal")
-    plugin = select_agent(config, role, task_class, plugins)
+    if plugin_id is None:
+        plugin = select_agent(config, role, task_class, plugins)
+    else:
+        plugin = plugins.get(plugin_id)
+        if plugin is None:
+            raise AgentError(
+                f"unknown or disabled agent {plugin_id!r} for role {role!r}"
+            )
     profile = None
     for agent in config.agents:
         if agent.id == role:

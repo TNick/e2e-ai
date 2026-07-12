@@ -11,8 +11,18 @@ from .connection import open_database, transaction
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
+
+_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    2: (
+        "ALTER TABLE agent_invocations ADD COLUMN provider_order_json TEXT",
+        "ALTER TABLE agent_invocations ADD COLUMN exit_class TEXT",
+        "ALTER TABLE agent_invocations ADD COLUMN switch_reason TEXT",
+        "ALTER TABLE agent_invocations ADD COLUMN failover_retry INTEGER "
+        "NOT NULL DEFAULT 0",
+    ),
+}
 
 
 def _utc_now_iso() -> str:
@@ -46,6 +56,20 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     logger.log(1, "applied schema version %d", SCHEMA_VERSION)
 
 
+def _apply_migrations(conn: sqlite3.Connection, from_version: int) -> None:
+    """Apply incremental schema migrations."""
+
+    for version in range(from_version + 1, SCHEMA_VERSION + 1):
+        statements = _MIGRATIONS.get(version, ())
+        for statement in statements:
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+            (version, _utc_now_iso()),
+        )
+        logger.log(1, "applied schema migration version %d", version)
+
+
 def ensure_database(path: Path) -> sqlite3.Connection:
     """Create or migrate the state database."""
 
@@ -55,6 +79,8 @@ def ensure_database(path: Path) -> sqlite3.Connection:
         with transaction(conn):
             if version == 0:
                 apply_schema(conn)
+            elif version < SCHEMA_VERSION:
+                _apply_migrations(conn, version)
             else:
                 raise RuntimeError(
                     f"unsupported schema version {version}; expected {SCHEMA_VERSION}"

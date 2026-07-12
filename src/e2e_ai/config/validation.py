@@ -250,4 +250,22 @@ def validate_effective_config(config: EffectiveConfig) -> None:
     if config.routing.canary_cache_seconds < 0:
         raise ConfigError("routing.canary_cache_seconds must not be negative")
 
+    failover = config.routing.failover
+    if failover.max_switches_per_test < 0:
+        raise ConfigError("routing.failover.max_switches_per_test must not be negative")
+
+    role_prefs = config.routing.role_preferences
+    for role, providers in (
+        ("planner", role_prefs.planner),
+        ("implementer", role_prefs.implementer),
+        ("instrumenter", role_prefs.instrumenter),
+    ):
+        for provider in providers:
+            if provider not in BUILTIN_AGENT_PLUGINS:
+                raise ConfigError(
+                    f"routing.role_preferences.{role} references unknown "
+                    f"provider {provider!r}; expected one of: "
+                    f"{', '.join(sorted(BUILTIN_AGENT_PLUGINS))}"
+                )
+
     logger.log(1, "validated effective config for project %s", config.project_id)

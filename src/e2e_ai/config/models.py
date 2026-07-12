@@ -178,6 +178,24 @@ def default_target_config() -> TargetConfig:
 
 
 @define
+class RolePreferencesConfig:
+    """Ordered provider preference lists per repair-loop role."""
+
+    planner: tuple[str, ...] = field(factory=tuple)
+    implementer: tuple[str, ...] = field(factory=tuple)
+    instrumenter: tuple[str, ...] = field(factory=tuple)
+
+
+@define
+class FailoverConfig:
+    """Provider rotation policy when an agent invocation fails retryably."""
+
+    enabled: bool = field(default=True)
+    retryable_exit_classes: tuple[str, ...] = field(factory=tuple)
+    max_switches_per_test: int = field(default=6)
+
+
+@define
 class RoutingConfig:
     """User-level agent routing defaults."""
 
@@ -187,6 +205,8 @@ class RoutingConfig:
     planner_requires_schema: bool = field(default=True)
     schema_retry_limit: int = field(default=1)
     long_task_min_remaining_percent: int = field(default=25)
+    role_preferences: RolePreferencesConfig = field(factory=RolePreferencesConfig)
+    failover: FailoverConfig = field(factory=FailoverConfig)
 
 
 @define

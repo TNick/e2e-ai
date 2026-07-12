@@ -103,4 +103,6 @@ class AgentResult:
             stderr=self.stderr,
             output_path=self.output_path,
             timed_out=self.timed_out,
+            exit_class=self.exit_class,
+            schema_valid=self.schema_valid,
         )

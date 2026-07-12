@@ -96,21 +96,107 @@ class _FakeAgent:
         self.plan_text = plan_text
         self.calls: list[str] = []
 
-    def check_login(self):  # pragma: no cover - unused here
-        raise NotImplementedError
+    def check_login(self):
+        from e2e_ai.agents.capabilities import QUOTA_READY, AgentHealth
+
+        return AgentHealth(
+            agent_id=self.id,
+            logged_in=True,
+            verified=True,
+            state=QUOTA_READY,
+        )
+
+    def discover(self):
+        from e2e_ai.agents.capabilities import AgentCapabilities
+
+        return AgentCapabilities(plugin_id=self.id, schema_mode=True)
+
+    def quota(self, task_class: str):
+        from e2e_ai.agents.capabilities import QUOTA_READY
+        from e2e_ai.agents.quota import QuotaSnapshot
+
+        _ = task_class
+        return QuotaSnapshot(plugin_id=self.id, state=QUOTA_READY)
+
+    def supports_playwright_mcp(self) -> bool:
+        return False
+
+    def plan(self, request):
+        self.calls.append(request.prompt)
+        from e2e_ai.agents.capabilities import AgentResult
+        from e2e_ai.agents.invocation import classify_agent_exit
+
+        return AgentResult(
+            agent_id=self.id,
+            exit_code=0,
+            stdout=self.plan_text,
+            stderr="",
+            exit_class=classify_agent_exit(0, self.plan_text, ""),
+        )
+
+    def implement(self, request):
+        self.calls.append(request.prompt)
+        from e2e_ai.agents.capabilities import AgentResult
+        from e2e_ai.agents.invocation import classify_agent_exit
+
+        return AgentResult(
+            agent_id=self.id,
+            exit_code=0,
+            stdout="implemented",
+            stderr="",
+            exit_class=classify_agent_exit(0, "", ""),
+        )
+
+    def instrument(self, request):
+        self.calls.append(request.prompt)
+        from e2e_ai.agents.capabilities import AgentResult
+        from e2e_ai.agents.invocation import classify_agent_exit
+
+        return AgentResult(
+            agent_id=self.id,
+            exit_code=0,
+            stdout=self.plan_text,
+            stderr="",
+            exit_class=classify_agent_exit(0, "", ""),
+        )
+
+
+class _LegacyBound:
+    def __init__(self, plugin: _FakeAgent) -> None:
+        self._plugin = plugin
+
+    @property
+    def id(self) -> str:
+        return self._plugin.id
 
     def run(self, prompt, *, workdir, timeout, log_dir=None, env=None, mcp=None):
-        self.calls.append(prompt)
-        return AgentRunResult(self.id, 0, self.plan_text, "")
+        _ = workdir, timeout, log_dir, env, mcp
+        if "instrumentation agent" in prompt:
+            result = self._plugin.instrument(type("R", (), {"prompt": prompt})())
+        elif "implementer agent" in prompt:
+            result = self._plugin.implement(type("R", (), {"prompt": prompt})())
+        else:
+            result = self._plugin.plan(type("R", (), {"prompt": prompt})())
+        return AgentRunResult(
+            self._plugin.id,
+            result.exit_code,
+            result.stdout,
+            result.stderr,
+            exit_class=result.exit_class,
+        )
 
 
 class _FakeRegistry:
     def __init__(self) -> None:
-        self._plugins = {}
+        self._plugins = {
+            "claude": _FakeAgent("claude"),
+            "codex": _FakeAgent("codex"),
+            "claude-strong": _FakeAgent("claude-strong", "add logging then fix"),
+        }
         self.agents = {
-            "planner": _FakeAgent("claude"),
-            "implementer": _FakeAgent("codex"),
-            "instrumenter": _FakeAgent("claude-strong", "add logging then fix"),
+            "planner": _LegacyBound(self._plugins["claude"]),
+            "implementer": _LegacyBound(self._plugins["codex"]),
+            "instrumenter": _LegacyBound(self._plugins["claude-strong"]),
         }
 
     def role(self, role: str):
@@ -144,8 +230,8 @@ def test_fixes_after_one_plan(tmp_path, monkeypatch):
 
     assert report.result is Result.PASSED
     assert report.attempts == 2
-    assert registry.agents["planner"].calls  # planner produced a plan
-    assert registry.agents["implementer"].calls  # implementer applied it
+    assert registry._plugins["claude"].calls  # planner produced a plan
+    assert registry._plugins["codex"].calls  # implementer applied it
     plans = RepairStore(conn).previous_plans(TEST.id)
     assert plans and plans[0].outcome == "implemented"
     conn.close()
@@ -167,7 +253,9 @@ def test_escalates_to_instrumenter_on_repeat_failure(tmp_path, monkeypatch):
     assert report.result is Result.FAILED
     # 3 attempts (default): initial + after implement + after instrument.
     assert report.attempts == 3
-    assert registry.agents["instrumenter"].calls
+    assert any(
+        "instrumentation agent" in call for call in registry._plugins["claude"].calls
+    )
     conn.close()
 
 
@@ -190,7 +278,7 @@ def test_environmental_failure_is_blocked(tmp_path, monkeypatch):
     report = _fix(_loop(config, conn, registry))
 
     assert report.result is Result.BLOCKED
-    assert not registry.agents["planner"].calls
+    assert not registry._plugins["claude"].calls
     conn.close()
 
 
@@ -199,7 +287,8 @@ def test_planner_can_declare_blocked(tmp_path, monkeypatch, blocked_plan):
     config = _config(tmp_path)
     conn = _seeded_conn(config)
     registry = _FakeRegistry()
-    registry.agents["planner"] = _FakeAgent("claude", blocked_plan)
+    registry.agents["planner"] = _LegacyBound(_FakeAgent("claude", blocked_plan))
+    registry._plugins["claude"] = registry.agents["planner"]._plugin
 
     _stub_run_attempt(
         monkeypatch,
@@ -210,5 +299,5 @@ def test_planner_can_declare_blocked(tmp_path, monkeypatch, blocked_plan):
     report = _fix(_loop(config, conn, registry))
 
     assert report.result is Result.BLOCKED
-    assert not registry.agents["implementer"].calls
+    assert not registry._plugins["codex"].calls
     conn.close()

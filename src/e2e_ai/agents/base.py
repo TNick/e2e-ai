@@ -52,6 +52,8 @@ class AgentRunResult:
     stderr: str
     output_path: Path | None = None
     timed_out: bool = False
+    exit_class: str | None = None
+    schema_valid: bool | None = None
 
     @property
     def ok(self) -> bool:

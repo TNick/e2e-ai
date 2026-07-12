@@ -229,6 +229,12 @@ const DESCRIPTIONS = {
       <dt>Status</dt><dd><span class="val">ok</span> or
         <span class="val">error</span> for the invocation.</dd>
       <dt>Exit</dt><dd>Process exit code (blank while running).</dd>
+      <dt>Exit class</dt><dd>Normalized failure category used for provider
+        failover (auth, quota, timeout, schema, and similar).</dd>
+      <dt>Failover</dt><dd><span class="val">yes</span> when this invocation
+        retried the same role with the next configured provider.</dd>
+      <dt>Switch reason</dt><dd>Why the previous provider was abandoned, when
+        failover rotated to this one.</dd>
     </dl>
     <p class="muted">Use the Status filter to isolate failed invocations.</p>`,
   settings: `<p><b>Settings</b> — how this monitor is connected and, optionally,
@@ -410,6 +416,9 @@ async function viewAgents(el) {
     { label: "Agent", type: "str", val: (x) => x.agent_id },
     { label: "Status", type: "str", val: (x) => x.status, cls: (x) => scls(x.status) },
     { label: "Exit", type: "num", val: (x) => x.exit_code },
+    { label: "Exit class", type: "str", val: (x) => x.exit_class || "" },
+    { label: "Failover", type: "str", val: (x) => x.failover_retry ? "yes" : "" },
+    { label: "Switch reason", type: "str", val: (x) => x.switch_reason || "" },
   ], g.items, { filter: { label: "Status", val: (x) => x.status } });
   el.innerHTML = pageHeader("agents", "Agent invocations", DESCRIPTIONS.agents) + table;
 }

@@ -304,6 +304,21 @@ The `agents` section mixes **role assignments** (`planner`, `implementer`,
 (`difficult` / `cheap`) pick a cost/capability tier within one CLI, so a planner
 can run a stronger model than the implementer.
 
+User-level `routing` settings control provider selection and failover:
+
+- `role_preferences` — ordered provider lists per role (`planner`,
+  `implementer`, `instrumenter`). When a provider fails for a retryable reason
+  (quota, auth, timeout, schema, empty output, no-op implementation), the
+  repair loop rotates to the next provider in the list for that role.
+- `failover.enabled` — turn provider rotation on or off (default: on).
+- `failover.max_switches_per_test` — cap provider switches per test so a bad
+  environment cannot loop forever (default: `6`).
+- `failover.retryable_exit_classes` — optional override for which normalized
+  exit classes trigger a switch.
+
+When `role_preferences` is omitted, each role uses its assigned plugin first,
+then the built-in preference order for the other installed providers.
+
 The `target` section declares which parts of the repository repair agents may
 edit:
 
