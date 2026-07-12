@@ -373,3 +373,73 @@ class TestTargetConfig:
         rendered = render_project_config_yaml(scaffold)
         assert "target:" in rendered
         assert "scope: frontend_only" in rendered
+
+
+class TestRuntimeRefreshConfig:
+    def test_parses_refresh_actions_and_rules(self, tmp_path: Path) -> None:
+        (tmp_path / "e2e").mkdir()
+        (tmp_path / "e2e-ai.yml").write_text(
+            (EXAMPLES / "fr-two.e2e-ai.yml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        config = load_effective_config(tmp_path)
+        refresh = config.target_runtime.docker_compose.refresh
+        assert refresh is not None
+        assert "frontend" in refresh.actions
+        assert refresh.actions["frontend"].compose == (
+            ("up", "-d", "--build", "frontend"),
+        )
+        assert refresh.rules[0].paths == ("frontend/**",)
+
+    def test_rejects_refresh_without_docker_compose(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "e2e").mkdir()
+        (tmp_path / "e2e-ai.yml").write_text(
+            """
+            project: {id: demo}
+            state: {dir: .e2e-ai}
+            playwright:
+              cwd: e2e
+              list_command: [echo, list]
+              run_command: [echo, run]
+            target_runtime:
+              backend: none
+              refresh:
+                actions:
+                  frontend:
+                    description: noop
+                    compose: [[restart, frontend]]
+                rules: []
+            """,
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="docker_compose"):
+            load_effective_config(tmp_path)
+
+    def test_rejects_unknown_refresh_rule_action(self, tmp_path: Path) -> None:
+        (tmp_path / "e2e").mkdir()
+        (tmp_path / "e2e-ai.yml").write_text(
+            """
+            project: {id: demo}
+            state: {dir: .e2e-ai}
+            playwright:
+              cwd: e2e
+              list_command: [echo, list]
+              run_command: [echo, run]
+            target_runtime:
+              backend: docker_compose
+              compose_files: [compose.yml]
+              refresh:
+                actions:
+                  frontend:
+                    description: rebuild frontend
+                    compose: [[up, frontend]]
+                rules:
+                  - paths: [frontend/**]
+                    actions: [missing]
+            """,
+            encoding="utf-8",
+        )
+        with pytest.raises(ConfigError, match="missing"):
+            load_effective_config(tmp_path)

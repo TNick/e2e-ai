@@ -44,38 +44,33 @@ class RoleBoundAgent:
         log_dir: Path | None = None,
         env: dict[str, str] | None = None,
         mcp: AgentMcpAttachment | None = None,
+        invocation_id: str | None = None,
+        output_path: Path | None = None,
     ) -> AgentRunResult:
         _ = env
+        common = {
+            "prompt": prompt,
+            "work_dir": workdir,
+            "timeout_seconds": timeout,
+            "log_dir": log_dir,
+            "profile": self._profile,
+            "mcp": mcp,
+            "invocation_id": invocation_id,
+            "output_path": output_path,
+        }
         if self._role == "implementer":
-            request = ImplementRequest(
-                prompt=prompt,
-                work_dir=workdir,
-                timeout_seconds=timeout,
-                log_dir=log_dir,
-                profile=self._profile,
-                mcp=mcp,
-            )
+            request = ImplementRequest(**common)
             result = self._plugin.implement(request)
         elif self._role == "instrumenter":
             request = InstrumentRequest(
-                prompt=prompt,
-                work_dir=workdir,
-                timeout_seconds=timeout,
-                log_dir=log_dir,
-                profile=self._profile,
+                **common,
                 require_schema=self._config.routing.planner_requires_schema,
-                mcp=mcp,
             )
             result = self._plugin.instrument(request)
         else:
             request = PlanRequest(
-                prompt=prompt,
-                work_dir=workdir,
-                timeout_seconds=timeout,
-                log_dir=log_dir,
-                profile=self._profile,
+                **common,
                 require_schema=self._config.routing.planner_requires_schema,
-                mcp=mcp,
             )
             result = self._plugin.plan(request)
         return AgentRunResult(

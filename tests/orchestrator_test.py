@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+import subprocess
 import textwrap
 from pathlib import Path
 
@@ -35,15 +36,18 @@ from e2e_ai.orchestrator.loop import (
 )
 from e2e_ai.orchestrator.models import (
     STATE_FAILED,
+    STATE_IMPLEMENTED,
     STATE_INSTRUMENTING,
     STATE_PASSED,
     STATE_PLANNING,
     STATE_REGRESSED,
     STATE_RUNNING,
+    RepairDecision,
 )
 from e2e_ai.orchestrator.prompts import (
     MAX_IMPLEMENTER_PLAN_CHARS,
     _truncate_implementer_plan,
+    build_implementer_prompt,
     build_planner_prompt,
 )
 from e2e_ai.orchestrator.state_machine import (
@@ -72,6 +76,8 @@ PROJECT_YAML = textwrap.dedent(
       list_command: [echo, list]
       run_command: [echo, run]
     exclude: {tests: []}
+    repair_policy:
+      max_attempts_per_test: 3
     agents:
       planner: {plugin: claude}
       implementer: {plugin: codex}
@@ -89,9 +95,34 @@ TEST = DiscoveredTest(
 )
 
 
+def _init_git_repo(root: Path) -> None:
+    subprocess.run(
+        ["git", "init"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "e2e-ai@test"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "e2e-ai"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _config(tmp_path: Path):
     (tmp_path / "e2e").mkdir()
     (tmp_path / "e2e-ai.yml").write_text(PROJECT_YAML, encoding="utf-8")
+    _init_git_repo(tmp_path)
     return load_effective_config(tmp_path)
 
 
@@ -186,8 +217,12 @@ class _FakeAgent:
             exit_class=classify_agent_exit(0, self.text, ""),
         )
 
-    def implement(self, request):
+    def implement(self, request, *, workdir: Path | None = None):
         self.calls.append(request.prompt)
+        if workdir is not None:
+            target = workdir / "frontend" / "e2e-touch.ts"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f"// touch {len(self.calls)}\n", encoding="utf-8")
         from e2e_ai.agents.capabilities import AgentResult
         from e2e_ai.agents.invocation import classify_agent_exit
 
@@ -265,7 +300,10 @@ class _LegacyBound:
                 type("R", (), {"prompt": prompt})()
             )
         elif "implementer agent" in prompt:
-            result = self._plugin.implement(type("R", (), {"prompt": prompt})())
+            result = self._plugin.implement(
+                type("R", (), {"prompt": prompt})(),
+                workdir=workdir,
+            )
         else:
             result = self._plugin.plan(type("R", (), {"prompt": prompt})())
         return AgentRunResult(
@@ -974,3 +1012,140 @@ class TestTargetScopePrompts:
             "BLOCKED_REFERENCE_BACKEND: needs API schema change"
         )
         assert reason == "needs API schema change"
+
+    def test_implementer_prompt_lists_runtime_refresh_actions(
+        self, tmp_path: Path
+    ) -> None:
+        yaml = PROJECT_YAML + textwrap.dedent(
+            """
+            target_runtime:
+              backend: docker_compose
+              compose_files: [compose.yml]
+              refresh:
+                actions:
+                  frontend:
+                    description: Rebuild frontend container.
+                    compose: [[up, frontend]]
+                rules: []
+            """
+        )
+        (tmp_path / "e2e-ai.yml").write_text(yaml, encoding="utf-8")
+        _init_git_repo(tmp_path)
+        config = load_effective_config(tmp_path)
+        conn = _seeded_conn(config)
+        packet = build_failure_packet(
+            test=TEST,
+            attempt=_result(tmp_path, passed=False),
+            report=None,
+            failure=FailureInfo(error_message="boom"),
+        )
+        context = build_repair_context(conn, packet, test=TEST, config=config)
+        prompt = build_implementer_prompt(
+            "fix the filter",
+            context,
+            config=config,
+            test=TEST,
+        )
+        assert "Runtime refresh actions" in prompt
+        assert "frontend: Rebuild frontend container." in prompt
+        assert "runtime_refresh_actions" in prompt
+        conn.close()
+
+
+class TestRuntimeRefreshOrchestration:
+    def test_refresh_runs_before_playwright_rerun(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        yaml = PROJECT_YAML + textwrap.dedent(
+            """
+            target_runtime:
+              backend: docker_compose
+              cwd: docker
+              compose_files: [compose.yml]
+              refresh:
+                actions:
+                  frontend:
+                    description: Rebuild frontend
+                    compose:
+                      - [up, -d, --build, frontend]
+                rules:
+                  - paths: [frontend/**]
+                    actions: [frontend]
+            """
+        )
+        (tmp_path / "docker").mkdir()
+        (tmp_path / "docker" / "compose.yml").write_text(
+            "services: {}\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "e2e-ai.yml").write_text(yaml, encoding="utf-8")
+        config = load_effective_config(tmp_path)
+        conn = _seeded_conn(config)
+        registry = _FakeRegistry()
+        registry._config = config
+        calls: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+
+        def fake_refresh(**kwargs):
+            calls.append(
+                (
+                    kwargs["changed_paths"],
+                    kwargs["requested_actions"],
+                )
+            )
+            return None
+
+        monkeypatch.setattr(
+            "e2e_ai.orchestrator.loop._maybe_refresh_target_runtime",
+            fake_refresh,
+        )
+
+        outcomes = [
+            (False, FailureInfo(error_message="expect fail")),
+            (True, None),
+        ]
+        attempt = {"index": 0}
+
+        def fake_run(config, request, **kwargs):
+            passed, failure = outcomes[attempt["index"]]
+            attempt["index"] += 1
+            return _result(tmp_path, passed=passed), failure
+
+        monkeypatch.setattr("e2e_ai.orchestrator.loop.run_attempt", fake_run)
+
+        def fake_handle_failed(**kwargs):
+            kwargs["repair_state"].state = STATE_IMPLEMENTED
+            return RepairDecision(
+                action="rerun",
+                next_state=STATE_IMPLEMENTED,
+                changed_paths=("frontend/src/app.tsx",),
+                runtime_refresh_actions=("frontend",),
+            )
+
+        monkeypatch.setattr(
+            "e2e_ai.orchestrator.loop.handle_failed_attempt",
+            fake_handle_failed,
+        )
+
+        from e2e_ai.runtime.models import RuntimeState
+
+        run_id = create_repair_run(conn, config)
+        runtime_state = RuntimeState(
+            id="runtime-test",
+            backend="docker_compose",
+            work_dir=config.state_dir / "runs" / run_id / "runtime",
+            env={},
+        )
+        runtime_state.work_dir.mkdir(parents=True, exist_ok=True)
+        state = run_one_test_until_resolved(
+            conn=conn,
+            config=config,
+            test=TEST,
+            run_id=run_id,
+            isolation=_FakeIsolation(),
+            agents=registry._plugins,
+            registry=registry,
+            runtime_state=runtime_state,
+        )
+        assert state.state == STATE_PASSED
+        assert calls == [(("frontend/src/app.tsx",), ("frontend",))]
+        conn.close()

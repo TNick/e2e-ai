@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from ..agents.progress import read_log_tail
 from ..errors import E2eAiError
 
 # Schema version the monitor understands (see e2e_ai/db/migrations.py).
@@ -178,6 +179,7 @@ class MonitorStore:
             )
             or 0
         )
+        active_agents = self.active_agent_count()
         return {
             "project": project,
             "counts": counts,
@@ -185,6 +187,7 @@ class MonitorStore:
             "active_run": active_run,
             "latest_run": latest_run,
             "active_attempts": active_attempts,
+            "active_agents": active_agents,
             "revision": self.state_revision(),
         }
 
@@ -381,6 +384,55 @@ class MonitorStore:
         plan["outcome"] = _decode_plan_outcome(plan.pop("result_json", None))
         return plan
 
+    def active_agent_count(self) -> int:
+        """Return the number of in-flight agent invocations."""
+
+        return int(
+            self._scalar(
+                "SELECT COUNT(*) FROM agent_invocations "
+                "WHERE finished_at IS NULL"
+            )
+            or 0
+        )
+
+    def list_running_agents(self) -> list[dict[str, Any]]:
+        """Return in-flight agent invocations, oldest first."""
+
+        rows = self._rows(
+            "SELECT a.*, t.title AS test_title "
+            "FROM agent_invocations a "
+            "LEFT JOIN tests t ON t.id = a.test_id "
+            "WHERE a.finished_at IS NULL "
+            "ORDER BY a.started_at ASC"
+        )
+        return [self._normalize_agent_row(row) for row in rows]
+
+    def read_agent_output(
+        self,
+        invocation_id: str,
+        *,
+        max_bytes: int = 200_000,
+    ) -> dict[str, Any] | None:
+        """Tail the stdout log for one agent invocation."""
+
+        row = self._row(
+            "SELECT stdout_path, finished_at "
+            "FROM agent_invocations WHERE id = ?",
+            (invocation_id,),
+        )
+        if row is None:
+            return None
+        stdout_path = row.get("stdout_path")
+        output = ""
+        if stdout_path:
+            output = read_log_tail(stdout_path, max_bytes=max_bytes)
+        status = "running" if row.get("finished_at") is None else "finished"
+        return {
+            "invocation_id": invocation_id,
+            "output": output,
+            "status": status,
+        }
+
     def list_agents(self, *, limit: int = 100) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 1000))
         rows = self._rows(
@@ -405,7 +457,11 @@ class MonitorStore:
         agent = self._normalize_agent_row(row)
         stdout_path = agent.get("stdout_path")
         stderr_path = agent.get("stderr_path")
-        agent["stdout"] = _read_log_file(stdout_path)
+        running = agent.get("finished_at") is None
+        if running and stdout_path:
+            agent["stdout"] = read_log_tail(stdout_path)
+        else:
+            agent["stdout"] = _read_log_file(stdout_path)
         if stderr_path and stderr_path != stdout_path:
             agent["stderr"] = _read_log_file(stderr_path)
         else:
@@ -420,7 +476,7 @@ class MonitorStore:
         else:
             agent.pop("test_title", None)
             agent.pop("test_spec_file", None)
-        if agent.get("role") == "planner" and test_id:
+        if not running and agent.get("role") == "planner" and test_id:
             plan = self._repair_plan_for_invocation(
                 test_id=test_id,
                 agent_id=agent["agent_id"],
@@ -466,9 +522,15 @@ class MonitorStore:
                 "(SELECT MAX(finished_at) FROM attempts) AS a_fin, "
                 "(SELECT MAX(started_at) FROM agent_invocations) AS ag_start, "
                 "(SELECT MAX(finished_at) FROM agent_invocations) AS ag_fin, "
-                "(SELECT MAX(started_at) FROM runs) AS r_start"
+                "(SELECT MAX(started_at) FROM runs) AS r_start, "
+                "(SELECT MAX(started_at) FROM agent_invocations "
+                "WHERE finished_at IS NULL) AS ag_running"
             )
             or {}
         )
         stamps = [v for v in maxima.values() if v]
-        return max(stamps) if stamps else ""
+        base = max(stamps) if stamps else ""
+        running = self.active_agent_count()
+        if running:
+            return f"{base}|running:{running}"
+        return base

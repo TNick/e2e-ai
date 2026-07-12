@@ -83,3 +83,5 @@ class RepairDecision:
     reason: str | None = field(default=None)
     plan_id: str | None = field(default=None)
     dry_run_prompt: str | None = field(default=None)
+    changed_paths: tuple[str, ...] = field(factory=tuple)
+    runtime_refresh_actions: tuple[str, ...] = field(factory=tuple)

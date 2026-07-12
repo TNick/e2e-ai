@@ -96,6 +96,47 @@ target_runtime:
       timeout_seconds: 90
   stop:
     policy: never
+  refresh:
+    actions:
+      frontend:
+        description: Rebuild and recreate the static frontend container.
+        compose:
+          - [up, -d, --build, frontend]
+      backend:
+        description: Restart the bind-mounted backend service after API edits.
+        compose:
+          - [restart, backend]
+      backend-image:
+        description: Rebuild and recreate the backend container image.
+        compose:
+          - [up, -d, --build, backend]
+      db-seed:
+        description: Rebuild and run the database seed container.
+        compose:
+          - [build, db-seed]
+          - [run, --rm, db-seed]
+      map-layers:
+        description: Restart services that consume map-layer runtime config.
+        compose:
+          - [restart, backend]
+          - [restart, map-worker]
+      mapproxy:
+        description: Restart MapProxy after mapproxy runtime config changes.
+        compose:
+          - [restart, mapproxy]
+    rules:
+      - paths: [frontend/**]
+        actions: [frontend]
+      - paths: [backend/**]
+        actions: [backend]
+      - paths: [docker/backend/**]
+        actions: [backend-image]
+      - paths: [docker/seed/**]
+        actions: [db-seed]
+      - paths: [docker/runtime-config/map-layers/**]
+        actions: [map-layers]
+      - paths: [docker/runtime-config/mapproxy/**]
+        actions: [mapproxy]
 
 # fr-two owns app-stack details; e2e-ai owns leases and reset orchestration.
 # The `fr_two` backend uses stable execution slots: the database name and user

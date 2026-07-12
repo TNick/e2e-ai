@@ -12,6 +12,7 @@ from e2e_ai.agents.capabilities import (
     QUOTA_READY,
     QUOTA_UNKNOWN,
 )
+from e2e_ai.agents.implementation_result import parse_implementation_result
 from e2e_ai.agents.invocation import (
     EXIT_AUTH_ERROR,
     EXIT_MAX_TURNS_EXCEEDED,
@@ -50,6 +51,7 @@ from e2e_ai.agents.schemas import (
     ImplementRequest,
     InstrumentRequest,
     PlanRequest,
+    implementation_output_schema,
 )
 from e2e_ai.config import (
     AgentConfig,
@@ -626,3 +628,69 @@ class TestMcpCapabilities:
         caps = agent.discover()
         assert caps.supports_mcp is True
         assert agent.supports_playwright_mcp() is True
+
+
+class TestInvokeArgvOutputPath:
+    def test_honors_explicit_output_path(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from e2e_ai.agents.plugins._common import invoke_argv
+
+        captured: dict[str, Path] = {}
+
+        def _fake_run_agent_command(
+            _argv,
+            *,
+            cwd,
+            env,
+            stdin_data,
+            stdout_path,
+            stderr_path,
+            timeout_seconds,
+        ):
+            _ = (cwd, env, stdin_data, stderr_path, timeout_seconds)
+            captured["stdout_path"] = stdout_path
+            stdout_path.write_text("done\n", encoding="utf-8")
+            return 0
+
+        monkeypatch.setattr(
+            "e2e_ai.agents.plugins._common.run_agent_command",
+            _fake_run_agent_command,
+        )
+        explicit = tmp_path / "agent_fixed.log"
+        result = invoke_argv(
+            "codex",
+            ["codex", "exec"],
+            cwd=tmp_path,
+            prompt="hello",
+            transport="stdin",
+            env={},
+            timeout_seconds=30,
+            log_dir=tmp_path / "logs",
+            output_path=explicit,
+        )
+        assert captured["stdout_path"] == explicit
+        assert result.output_path == explicit
+        assert result.stdout == "done"
+
+
+class TestImplementationOutputSchema:
+    def test_requires_runtime_refresh_actions(self) -> None:
+        schema = implementation_output_schema()
+        required = schema["required"]
+        assert "runtime_refresh_actions" in required
+        props = schema["properties"]
+        assert props["runtime_refresh_actions"]["type"] == "array"
+
+
+class TestParseImplementationResult:
+    def test_parses_valid_payload(self) -> None:
+        result = parse_implementation_result(
+            '{"summary":"done","runtime_refresh_actions":["frontend"]}'
+        )
+        assert result is not None
+        assert result.runtime_refresh_actions == ("frontend",)
+
+    def test_returns_none_for_invalid_payload(self) -> None:
+        assert parse_implementation_result("not json") is None
+        assert parse_implementation_result('{"summary":"x"}') is None

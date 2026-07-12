@@ -365,6 +365,55 @@ class TestApi:
         with client.stream("GET", "/api/events?limit=1") as r:
             body = "".join(chunk for chunk in r.iter_text())
         assert '"type": "state_changed"' in body
+        assert '"active_agents"' in body
+
+    def test_summary_includes_active_agents(self, tmp_path):
+        client, _ = _client(tmp_path)
+        summary = client.get("/api/summary").json()
+        assert "active_agents" in summary
+
+    def test_running_agent_output_endpoint(self, tmp_path):
+        client, _ = _client(tmp_path)
+        log_path = tmp_path / "running.log"
+        log_path.write_text('{"type":"thinking"}\n', encoding="utf-8")
+        db = tmp_path / "state.sqlite3"
+        conn = ensure_database(db)
+        conn.execute(
+            """
+            INSERT INTO agent_invocations (
+                id, run_id, test_id, role, agent_id, command_json, status,
+                started_at, finished_at, exit_code, stdout_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "agent_run1",
+                "run1",
+                "t1",
+                "implementer",
+                "cursor_auto",
+                '["cursor_auto"]',
+                "running",
+                _now(),
+                None,
+                None,
+                str(log_path),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        running = client.get("/api/agents/running").json()["items"]
+        assert len(running) == 1
+        assert running[0]["id"] == "agent_run1"
+
+        out = client.get("/api/agents/agent_run1/output").json()
+        assert out["status"] == "running"
+        assert "thinking" in out["output"]
+
+        detail = client.get("/api/agents/agent_run1").json()
+        assert detail["status"] == "running"
+        assert detail["finished_at"] is None
+        assert "thinking" in (detail.get("stdout") or "")
 
     def test_index_html_served(self, tmp_path):
         client, _ = _client(tmp_path)

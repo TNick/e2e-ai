@@ -180,6 +180,38 @@ def validate_target_runtime(config: EffectiveConfig) -> None:
                     f"health check {check.name!r} requires argv "
                     "for command kind"
                 )
+        refresh = compose.refresh
+        if refresh is not None:
+            if not refresh.actions:
+                raise ConfigError(
+                    "target_runtime.refresh.actions must not be empty"
+                )
+            for action_name, action in refresh.actions.items():
+                if not action.compose:
+                    raise ConfigError(
+                        "target_runtime.refresh.actions."
+                        f"{action_name}.compose must not be empty"
+                    )
+            known_actions = set(refresh.actions)
+            for index, rule in enumerate(refresh.rules):
+                if not rule.paths:
+                    raise ConfigError(
+                        f"target_runtime.refresh.rules[{index}].paths "
+                        "must not be empty"
+                    )
+                if not rule.actions:
+                    raise ConfigError(
+                        f"target_runtime.refresh.rules[{index}].actions "
+                        "must not be empty"
+                    )
+                unknown = [
+                    name for name in rule.actions if name not in known_actions
+                ]
+                if unknown:
+                    raise ConfigError(
+                        f"target_runtime.refresh.rules[{index}] references "
+                        f"unknown actions: {', '.join(unknown)}"
+                    )
 
 
 def validate_effective_config(config: EffectiveConfig) -> None:

@@ -13,11 +13,13 @@ from enum import StrEnum
 from pathlib import Path
 
 from ..agents.base import AgentPlugin
+from ..agents.implementation_result import parse_implementation_result
+from ..agents.invocation import EXIT_QUOTA_ERROR
+from ..agents.progress import LogTailFollower, format_stream_event
 from ..agents.registry import AgentRegistry
 from ..agents.role_agent import bind_role
 from ..agents.router import ROLE_TASK_CLASS, ProviderSelection, select_provider
 from ..agents.routing_outcomes import (
-    EXIT_QUOTA_ERROR,
     RoutingAction,
     classify_invocation_exit,
     decide_routing_action,
@@ -27,6 +29,11 @@ from ..analysis import (
     build_repair_context,
     insert_failure_packet,
     trim_repair_context,
+)
+from ..analysis.worktree import (
+    WorktreeSnapshot,
+    capture_worktree_snapshot,
+    diff_worktree_snapshots,
 )
 from ..config import EffectiveConfig
 from ..inventory.models import DiscoveredTest
@@ -60,7 +67,14 @@ from ..runner import (
     run_attempt,
 )
 from ..runner.results import load_playwright_json
+from ..runtime.models import RuntimeState
+from ..runtime.refresh import (
+    execute_runtime_refresh,
+    plan_runtime_refresh,
+)
+from ..runtime.registry import create_target_runtime
 from ..runtime.session import (
+    build_runtime_context,
     managed_target_runtime,
     runtime_env_for_playwright,
 )
@@ -106,11 +120,12 @@ from .state_machine import (
 )
 from .store import (
     attempt_history_counts,
+    begin_agent_invocation,
     create_repair_run,
+    finish_agent_invocation,
     finish_repair_run,
     format_test_history_suffix,
     has_ever_passed,
-    record_agent_invocation,
     record_repair_plan,
     set_plan_outcome,
 )
@@ -161,6 +176,8 @@ class AgentInvocationOutcome:
     agent_id: str | None = None
     routing_action: RoutingAction | None = None
     exit_class: str | None = None
+    changed_paths: tuple[str, ...] = field(default_factory=tuple)
+    runtime_refresh_actions: tuple[str, ...] = field(default_factory=tuple)
 
 
 class TestResult(StrEnum):
@@ -275,8 +292,10 @@ def _run_shard_coverage(
     say: Reporter,
     dry_run_agents: bool,
     runtime_env: Mapping[str, str] | None,
+    runtime_state: RuntimeState | None,
     min_tests_per_slot: int,
     summary: LoopSummary,
+    verbose_agents: bool = False,
 ) -> tuple[bool, str | None]:
     """Run tests until each fr-two slot has min pass count."""
 
@@ -324,6 +343,8 @@ def _run_shard_coverage(
             reporter=say,
             dry_run_agents=dry_run_agents,
             runtime_env=runtime_env,
+            runtime_state=runtime_state,
+            verbose_agents=verbose_agents,
         )
         executed_ids.add(test.id)
         summary.reports.append(_test_report_from_state(test, state))
@@ -440,6 +461,55 @@ def _working_tree_changed(project_root: Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def _implementation_refresh_actions(text: str) -> tuple[str, ...]:
+    parsed = parse_implementation_result(text)
+    if parsed is None:
+        return ()
+    return parsed.runtime_refresh_actions
+
+
+def _maybe_refresh_target_runtime(
+    *,
+    config: EffectiveConfig,
+    runtime_state: RuntimeState | None,
+    run_id: str,
+    changed_paths: tuple[str, ...],
+    requested_actions: tuple[str, ...],
+    reporter: Reporter,
+) -> str | None:
+    """Refresh target runtime services when configured; return error text."""
+
+    if runtime_state is None:
+        return None
+    compose = config.target_runtime.docker_compose
+    if compose is None or compose.refresh is None:
+        return None
+
+    refresh_plan = plan_runtime_refresh(
+        compose.refresh,
+        changed_paths=changed_paths,
+        requested_actions=requested_actions,
+    )
+    if refresh_plan is None:
+        return None
+
+    reporter(
+        "  [runtime] refreshing target stack: "
+        + ", ".join(refresh_plan.selected_actions)
+    )
+    runtime = create_target_runtime(config)
+    context = build_runtime_context(config, run_id, extra_env=runtime_state.env)
+    execution = execute_runtime_refresh(
+        runtime,
+        context=context,
+        state=runtime_state,
+        plan=refresh_plan,
+    )
+    if execution.ok:
+        return None
+    return execution.error or "target runtime refresh failed"
+
+
 def _new_agent_invocation_id() -> str:
     return f"agent_{uuid.uuid4().hex[:16]}"
 
@@ -473,6 +543,9 @@ def _invoke_agent_once(
     plugin_id: str,
     selection: ProviderSelection,
     switch_reason: str | None = None,
+    reporter: Reporter | None = None,
+    verbose_agents: bool = False,
+    worktree_baseline: WorktreeSnapshot | None = None,
 ) -> tuple[str, bool, str | None, str, str | None]:
     agent = bind_role(
         config,
@@ -509,13 +582,72 @@ def _invoke_agent_once(
                 None,
             )
     full_prompt = _append_mcp_prompt(prompt, context=context, mcp=mcp)
-    run = agent.run(
-        full_prompt,
-        workdir=config.project_root,
-        timeout=timeout,
-        log_dir=log_dir,
-        mcp=mcp if mcp is not None and mcp.enabled else None,
+    say = reporter or (lambda _msg: None)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = log_dir / f"{invocation_id}.log"
+    begin_agent_invocation(
+        conn,
+        invocation_id=invocation_id,
+        run_id=run_id,
+        role=role,
+        agent_id=agent.id,
+        command=[agent.id, invocation_id],
+        test_id=test_id,
+        stdout_path=str(stdout_path),
+        stderr_path=str(stdout_path),
+        provider_order=list(selection.provider_order),
+        switch_reason=switch_reason,
+        failover_retry=selection.failover_retry,
     )
+
+    follower: LogTailFollower | None = None
+    if verbose_agents:
+
+        def _on_progress_line(line: str) -> None:
+            message = format_stream_event(agent.id, role, line)
+            if message:
+                say(message)
+
+        follower = LogTailFollower(
+            stdout_path,
+            on_chunk=lambda _chunk: None,
+            line_handler=_on_progress_line,
+        )
+        follower.start()
+        say(f"  [agent] {role}/{agent.id} started")
+
+    run = None
+    try:
+        run = agent.run(
+            full_prompt,
+            workdir=config.project_root,
+            timeout=timeout,
+            log_dir=log_dir,
+            mcp=mcp if mcp is not None and mcp.enabled else None,
+            invocation_id=invocation_id,
+            output_path=stdout_path,
+        )
+    except Exception:
+        logger.log(
+            1,
+            "agent invocation %s failed before completion",
+            invocation_id,
+            exc_info=True,
+        )
+        finish_agent_invocation(
+            conn,
+            invocation_id,
+            status="error",
+            exit_code=None,
+            exit_class="task_failure",
+        )
+        if verbose_agents:
+            say(f"  [agent] {role}/{agent.id} finished (error)")
+        raise
+    finally:
+        if follower is not None:
+            follower.stop()
+    assert run is not None
     if mcp is not None and mcp.enabled and mcp.session is not None:
         summary = mcp_artifact_summary(mcp.session)
         logger.log(1, "MCP artifacts for %s: %s", invocation_id, summary)
@@ -526,11 +658,17 @@ def _invoke_agent_once(
     text = run.stdout.strip()
     if not text:
         text = f"(agent produced no output; exit={run.exit_code})"
-    noop = (
-        role == "implementer"
-        and run.ok
-        and not _working_tree_changed(config.project_root)
-    )
+    noop = False
+    if role == "implementer" and run.ok:
+        if worktree_baseline is not None:
+            current = capture_worktree_snapshot(config.project_root)
+            noop = not diff_worktree_snapshots(
+                worktree_baseline,
+                current,
+                config.project_root,
+            )
+        else:
+            noop = not _working_tree_changed(config.project_root)
     exit_class = classify_invocation_exit(
         run,
         role=role,
@@ -538,21 +676,15 @@ def _invoke_agent_once(
         plan_text=text if role in {"planner", "instrumenter"} else None,
         noop_implementation=noop,
     )
-    record_agent_invocation(
+    finish_agent_invocation(
         conn,
-        run_id=run_id,
-        role=role,
-        agent_id=agent.id,
-        command=[agent.id, invocation_id],
+        invocation_id,
         status="ok" if run.ok and not noop else "error",
         exit_code=run.exit_code,
-        test_id=test_id,
-        stdout_path=str(run.output_path) if run.output_path else None,
-        provider_order=list(selection.provider_order),
         exit_class=exit_class,
-        switch_reason=switch_reason,
-        failover_retry=selection.failover_retry,
     )
+    if verbose_agents:
+        say(f"  [agent] {role}/{agent.id} finished (exit {run.exit_code})")
     invocation_ok = run.ok and not noop
     return text, invocation_ok, None, agent.id, exit_class
 
@@ -571,11 +703,39 @@ def _invoke_role_with_failover(
     lease: EnvironmentLease | None,
     failover: FailoverTracker,
     external_blocker: bool = False,
+    reporter: Reporter | None = None,
+    verbose_agents: bool = False,
 ) -> AgentInvocationOutcome:
     task_class = ROLE_TASK_CLASS.get(role, "normal")
     plugins = registry._plugins  # noqa: SLF001
     last_agent_id: str | None = None
     last_exit_class: str | None = None
+    worktree_baseline = (
+        capture_worktree_snapshot(config.project_root)
+        if role == "implementer"
+        else None
+    )
+
+    def _finalize(outcome: AgentInvocationOutcome) -> AgentInvocationOutcome:
+        if role != "implementer" or worktree_baseline is None:
+            return outcome
+        current = capture_worktree_snapshot(config.project_root)
+        changed_paths = diff_worktree_snapshots(
+            worktree_baseline,
+            current,
+            config.project_root,
+        )
+        requested = _implementation_refresh_actions(outcome.text)
+        return AgentInvocationOutcome(
+            text=outcome.text,
+            ok=outcome.ok,
+            mcp_error=outcome.mcp_error,
+            agent_id=outcome.agent_id,
+            routing_action=outcome.routing_action,
+            exit_class=outcome.exit_class,
+            changed_paths=changed_paths,
+            runtime_refresh_actions=requested,
+        )
 
     while True:
         excluded = failover.failed_providers(role)
@@ -592,12 +752,14 @@ def _invoke_role_with_failover(
             from ..errors import AgentError
 
             if isinstance(exc, AgentError):
-                return AgentInvocationOutcome(
-                    text=str(exc),
-                    ok=False,
-                    agent_id=last_agent_id,
-                    routing_action=RoutingAction.STOP_TEST,
-                    exit_class=last_exit_class,
+                return _finalize(
+                    AgentInvocationOutcome(
+                        text=str(exc),
+                        ok=False,
+                        agent_id=last_agent_id,
+                        routing_action=RoutingAction.STOP_TEST,
+                        exit_class=last_exit_class,
+                    )
                 )
             raise
 
@@ -617,27 +779,34 @@ def _invoke_role_with_failover(
             switch_reason=(
                 f"failover from {sorted(excluded)[-1]}" if excluded else None
             ),
+            reporter=reporter,
+            verbose_agents=verbose_agents,
+            worktree_baseline=worktree_baseline,
         )
         last_agent_id = agent_id
         last_exit_class = exit_class
 
         if mcp_err:
-            return AgentInvocationOutcome(
-                text=text,
-                ok=False,
-                mcp_error=mcp_err,
-                agent_id=agent_id,
-                routing_action=RoutingAction.EXTERNAL_BLOCKER,
-                exit_class=exit_class,
+            return _finalize(
+                AgentInvocationOutcome(
+                    text=text,
+                    ok=False,
+                    mcp_error=mcp_err,
+                    agent_id=agent_id,
+                    routing_action=RoutingAction.EXTERNAL_BLOCKER,
+                    exit_class=exit_class,
+                )
             )
 
         if ok:
-            return AgentInvocationOutcome(
-                text=text,
-                ok=True,
-                agent_id=agent_id,
-                routing_action=RoutingAction.SUCCESS,
-                exit_class=exit_class,
+            return _finalize(
+                AgentInvocationOutcome(
+                    text=text,
+                    ok=True,
+                    agent_id=agent_id,
+                    routing_action=RoutingAction.SUCCESS,
+                    exit_class=exit_class,
+                )
             )
 
         pool = list(selection.provider_order)
@@ -663,22 +832,26 @@ def _invoke_role_with_failover(
 
         if action is RoutingAction.SWITCH_PROVIDER:
             if not providers_remaining or not failover.can_switch(config):
-                return AgentInvocationOutcome(
-                    text=text,
-                    ok=False,
-                    agent_id=agent_id,
-                    routing_action=RoutingAction.STOP_TEST,
-                    exit_class=exit_class,
+                return _finalize(
+                    AgentInvocationOutcome(
+                        text=text,
+                        ok=False,
+                        agent_id=agent_id,
+                        routing_action=RoutingAction.STOP_TEST,
+                        exit_class=exit_class,
+                    )
                 )
             failover.mark_failed(role, selection.selected_provider)
             continue
 
-        return AgentInvocationOutcome(
-            text=text,
-            ok=False,
-            agent_id=agent_id,
-            routing_action=action,
-            exit_class=exit_class,
+        return _finalize(
+            AgentInvocationOutcome(
+                text=text,
+                ok=False,
+                agent_id=agent_id,
+                routing_action=action,
+                exit_class=exit_class,
+            )
         )
 
 
@@ -703,10 +876,12 @@ def _invoke_agent(
     lease: EnvironmentLease | None,
     plugin: AgentPlugin,
     failover: FailoverTracker | None = None,
-) -> tuple[str, bool, str | None, str | None]:
+    reporter: Reporter | None = None,
+    verbose_agents: bool = False,
+) -> AgentInvocationOutcome:
     _ = plugin
     tracker = failover or FailoverTracker()
-    outcome = _invoke_role_with_failover(
+    return _invoke_role_with_failover(
         registry,
         role,
         prompt,
@@ -718,8 +893,9 @@ def _invoke_agent(
         context=context,
         lease=lease,
         failover=tracker,
+        reporter=reporter,
+        verbose_agents=verbose_agents,
     )
-    return outcome.text, outcome.ok, outcome.mcp_error, outcome.exit_class
 
 
 def handle_failed_attempt(
@@ -735,6 +911,8 @@ def handle_failed_attempt(
     dry_run_agents: bool = False,
     lease: EnvironmentLease | None = None,
     failover: FailoverTracker | None = None,
+    reporter: Reporter | None = None,
+    verbose_agents: bool = False,
 ) -> RepairDecision:
     """Plan, implement, instrument, or stop after a failed attempt."""
 
@@ -788,7 +966,7 @@ def handle_failed_attempt(
                 next_state=STATE_INSTRUMENTING,
                 dry_run_prompt=instr_prompt,
             )
-        _, instr_ok, mcp_err, _instr_exit_class = _invoke_agent(
+        instr_outcome = _invoke_agent(
             registry,
             "instrumenter",
             instr_prompt,
@@ -801,16 +979,18 @@ def handle_failed_attempt(
             lease=lease,
             plugin=_role_plugin(registry, "instrumenter"),
             failover=tracker,
+            reporter=reporter,
+            verbose_agents=verbose_agents,
         )
-        if mcp_err:
+        if instr_outcome.mcp_error:
             return RepairDecision(
                 action="mcp_blocker",
                 next_state=STATE_EXTERNAL_BLOCKER,
                 stop_run=True,
-                reason=mcp_err,
+                reason=instr_outcome.mcp_error,
             )
         _transition(repair_state, EVENT_INSTRUMENTED)
-        if not instr_ok:
+        if not instr_outcome.ok:
             repair_state.note = "instrumenter agent failed"
         context = trim_repair_context(
             build_repair_context(conn, packet, test=test, config=config)
@@ -830,7 +1010,7 @@ def handle_failed_attempt(
             dry_run_prompt=plan_prompt,
         )
 
-    plan_text, ok, mcp_err, plan_exit_class = _invoke_agent(
+    plan_outcome = _invoke_agent(
         registry,
         "planner",
         plan_prompt,
@@ -843,17 +1023,20 @@ def handle_failed_attempt(
         lease=lease,
         plugin=_role_plugin(registry, "planner"),
         failover=tracker,
+        reporter=reporter,
+        verbose_agents=verbose_agents,
     )
-    if mcp_err:
+    plan_text = plan_outcome.text
+    if plan_outcome.mcp_error:
         return RepairDecision(
             action="mcp_blocker",
             next_state=STATE_EXTERNAL_BLOCKER,
             stop_run=True,
-            reason=mcp_err,
+            reason=plan_outcome.mcp_error,
         )
 
-    if not ok:
-        if plan_exit_class == EXIT_QUOTA_ERROR:
+    if not plan_outcome.ok:
+        if plan_outcome.exit_class == EXIT_QUOTA_ERROR:
             return RepairDecision(
                 action="agent_quota_blocker",
                 next_state=STATE_EXTERNAL_BLOCKER,
@@ -894,7 +1077,7 @@ def handle_failed_attempt(
         config=config,
         test=test,
     )
-    impl_text, impl_ok, impl_mcp_err, _impl_exit_class = _invoke_agent(
+    impl_outcome = _invoke_agent(
         registry,
         "implementer",
         impl_prompt,
@@ -907,27 +1090,28 @@ def handle_failed_attempt(
         lease=lease,
         plugin=_role_plugin(registry, "implementer"),
         failover=tracker,
+        reporter=reporter,
+        verbose_agents=verbose_agents,
     )
-    if impl_mcp_err:
+    if impl_outcome.mcp_error:
         return RepairDecision(
             action="mcp_blocker",
             next_state=STATE_EXTERNAL_BLOCKER,
             stop_run=True,
-            reason=impl_mcp_err,
+            reason=impl_outcome.mcp_error,
         )
-    if not impl_ok and _impl_exit_class == EXIT_QUOTA_ERROR:
+    if not impl_outcome.ok and impl_outcome.exit_class == EXIT_QUOTA_ERROR:
         return RepairDecision(
             action="agent_quota_blocker",
             next_state=STATE_EXTERNAL_BLOCKER,
             stop_run=True,
             reason="all configured implementer providers exhausted quota",
         )
-    _ = impl_text
     _transition(repair_state, EVENT_IMPLEMENTED)
     set_plan_outcome(
         conn,
         plan_id,
-        "implemented" if impl_ok else "implement_failed",
+        "implemented" if impl_outcome.ok else "implement_failed",
     )
     repair_state.repair_round += 1
 
@@ -935,6 +1119,8 @@ def handle_failed_attempt(
         action="rerun",
         next_state=STATE_IMPLEMENTED,
         plan_id=plan_id,
+        changed_paths=impl_outcome.changed_paths,
+        runtime_refresh_actions=impl_outcome.runtime_refresh_actions,
     )
 
 
@@ -950,6 +1136,8 @@ def run_one_test_until_resolved(
     reporter: Reporter | None = None,
     dry_run_agents: bool = False,
     runtime_env: Mapping[str, str] | None = None,
+    runtime_state: RuntimeState | None = None,
+    verbose_agents: bool = False,
 ) -> TestRepairState:
     """Run and repair one test until it passes or blocks."""
 
@@ -1067,6 +1255,8 @@ def run_one_test_until_resolved(
             dry_run_agents=dry_run_agents,
             lease=lease,
             failover=failover,
+            reporter=say,
+            verbose_agents=verbose_agents,
         )
 
         if decision.dry_run_prompt:
@@ -1102,6 +1292,26 @@ def run_one_test_until_resolved(
         # Rerun after implement; otherwise apply the decision state
         # (e.g. planner failed while still in planning).
         if repair_state.state == STATE_IMPLEMENTED:
+            refresh_error = _maybe_refresh_target_runtime(
+                config=config,
+                runtime_state=runtime_state,
+                run_id=run_id,
+                changed_paths=decision.changed_paths,
+                requested_actions=decision.runtime_refresh_actions,
+                reporter=say,
+            )
+            if refresh_error:
+                repair_state.state = STATE_EXTERNAL_BLOCKER
+                repair_state.note = refresh_error
+                conn.execute(
+                    "UPDATE tests SET last_status = ? WHERE id = ?",
+                    (TestStatus.BLOCKED.value, test.id),
+                )
+                conn.commit()
+                if lease is not None:
+                    isolation.cleanup_environment(lease, "blocked")
+                say(f"  [blocked] {refresh_error}")
+                return repair_state
             _transition(repair_state, EVENT_RERUN)
         else:
             repair_state.state = decision.next_state
@@ -1140,6 +1350,7 @@ def run_repair_loop(
     stop_on_failure: bool = False,
     start_runtime: bool = True,
     min_tests_per_slot: int | None = None,
+    verbose_agents: bool = False,
 ) -> LoopSummary:
     """Run tests until green or blocked."""
 
@@ -1226,8 +1437,10 @@ def run_repair_loop(
                     say=say,
                     dry_run_agents=dry_run_agents,
                     runtime_env=runtime_env,
+                    runtime_state=runtime_state,
                     min_tests_per_slot=min_tests_per_slot,
                     summary=summary,
+                    verbose_agents=verbose_agents,
                 )
             else:
                 for test in pending:
@@ -1242,6 +1455,8 @@ def run_repair_loop(
                         reporter=say,
                         dry_run_agents=dry_run_agents,
                         runtime_env=runtime_env,
+                        runtime_state=runtime_state,
+                        verbose_agents=verbose_agents,
                     )
                     summary.reports.append(
                         _test_report_from_state(test, state),
@@ -1294,12 +1509,14 @@ class FixLoop:
         backend: IsolationBackend | None = None,
         reporter: Reporter | None = None,
         dry_run: bool = False,
+        verbose_agents: bool = False,
     ) -> None:
         self.config = config
         self.conn = conn
         self.registry = registry
         self.backend = backend or create_isolation_backend(config)
         self.dry_run = dry_run
+        self.verbose_agents = verbose_agents
         self._say = reporter or (lambda msg: None)
         self.store = _LegacyStore(conn)
 
@@ -1322,6 +1539,7 @@ class FixLoop:
             registry=self.registry,
             reporter=self._say,
             dry_run_agents=self.dry_run,
+            verbose_agents=self.verbose_agents,
         )
         return _test_report_from_state(test, state)
 
@@ -1348,6 +1566,7 @@ class FixLoop:
             stop_on_failure=stop_on_failure,
             start_runtime=start_runtime,
             min_tests_per_slot=min_tests_per_slot,
+            verbose_agents=self.verbose_agents,
         )
 
 

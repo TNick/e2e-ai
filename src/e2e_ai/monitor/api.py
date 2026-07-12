@@ -109,9 +109,25 @@ def register_routes(
     def agents(limit: int = Query(100)) -> dict[str, Any]:
         return {"items": _guard(lambda: store.list_agents(limit=limit))}
 
+    @app.get("/api/agents/running")
+    def running_agents() -> dict[str, Any]:
+        return {"items": _guard(store.list_running_agents)}
+
     @app.get("/api/agents/{invocation_id}")
     def agent(invocation_id: str) -> dict[str, Any]:
         data = _guard(lambda: store.get_agent(invocation_id))
+        if data is None:
+            raise HTTPException(
+                status_code=404,
+                detail="agent invocation not found",
+            )
+        return data
+
+    @app.get("/api/agents/{invocation_id}/output")
+    def agent_output(invocation_id: str) -> dict[str, Any]:
+        data = _guard(
+            lambda: store.read_agent_output(invocation_id),
+        )
         if data is None:
             raise HTTPException(
                 status_code=404,
@@ -185,13 +201,16 @@ def register_routes(
                     break
                 try:
                     revision = store.state_revision()
-                    active = store.summary().get("active_attempts", 0)
+                    summary = store.summary()
+                    active = summary.get("active_attempts", 0)
+                    active_agents = summary.get("active_agents", 0)
                 except MonitorError:
-                    revision, active = "", 0
+                    revision, active, active_agents = "", 0, 0
                 event = {
                     "type": "state_changed",
                     "revision": f"{revision}|{processes.change_seq}",
                     "active_attempts": active,
+                    "active_agents": active_agents,
                 }
                 yield f"data: {json.dumps(event)}\n\n"
                 sent += 1

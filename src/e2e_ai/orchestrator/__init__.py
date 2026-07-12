@@ -50,7 +50,9 @@ from .state_machine import (
     validate_transition,
 )
 from .store import (
+    begin_agent_invocation,
     create_repair_run,
+    finish_agent_invocation,
     finish_repair_run,
     has_ever_passed,
     record_agent_invocation,
@@ -82,6 +84,7 @@ __all__ = [
     "TestRepairState",
     "TestReport",
     "TestResult",
+    "begin_agent_invocation",
     "build_backend",
     "build_implementer_prompt",
     "build_instrumentation_prompt",
@@ -90,6 +93,7 @@ __all__ = [
     "create_repair_run",
     "default_reporter",
     "execute_attempt",
+    "finish_agent_invocation",
     "finish_repair_run",
     "handle_failed_attempt",
     "has_ever_passed",

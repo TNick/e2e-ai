@@ -37,6 +37,9 @@ from .models import (
     RolePreferencesConfig,
     RoutingConfig,
     RuntimeHealthCheckConfig,
+    RuntimeRefreshActionConfig,
+    RuntimeRefreshConfig,
+    RuntimeRefreshRuleConfig,
     RuntimeStartConfig,
     RuntimeStopConfig,
     TargetConfig,
@@ -575,6 +578,80 @@ def _parse_runtime_health_checks(
     return tuple(checks)
 
 
+def _parse_refresh_compose_argv(
+    data: object,
+    field_name: str,
+) -> tuple[tuple[str, ...], ...]:
+    if data is None:
+        return ()
+    if not isinstance(data, list):
+        raise ConfigError(f"{field_name} must be a list")
+    commands: list[tuple[str, ...]] = []
+    for index, raw in enumerate(data):
+        if not isinstance(raw, list) or not raw:
+            raise ConfigError(
+                f"{field_name}[{index}] must be a non-empty argv list"
+            )
+        commands.append(tuple(str(item) for item in raw))
+    return tuple(commands)
+
+
+def _parse_runtime_refresh(data: object) -> RuntimeRefreshConfig | None:
+    if data is None:
+        return None
+    mapping = _require_mapping(data, "target_runtime.refresh")
+    actions_raw = mapping.get("actions")
+    if actions_raw is None:
+        return None
+    actions_map = _require_mapping(
+        actions_raw, "target_runtime.refresh.actions"
+    )
+    actions: dict[str, RuntimeRefreshActionConfig] = {}
+    for action_name, raw_action in actions_map.items():
+        action_mapping = _require_mapping(
+            raw_action,
+            f"target_runtime.refresh.actions.{action_name}",
+        )
+        actions[str(action_name)] = RuntimeRefreshActionConfig(
+            description=str(action_mapping.get("description", "")),
+            compose=_parse_refresh_compose_argv(
+                action_mapping.get("compose"),
+                f"target_runtime.refresh.actions.{action_name}.compose",
+            ),
+        )
+    rules: list[RuntimeRefreshRuleConfig] = []
+    rules_raw = mapping.get("rules")
+    if rules_raw is not None:
+        if not isinstance(rules_raw, list):
+            raise ConfigError("target_runtime.refresh.rules must be a list")
+        for index, raw_rule in enumerate(rules_raw):
+            rule_map = _require_mapping(
+                raw_rule,
+                f"target_runtime.refresh.rules[{index}]",
+            )
+            paths_raw = rule_map.get("paths")
+            actions_raw_rule = rule_map.get("actions")
+            if not isinstance(paths_raw, list) or not paths_raw:
+                raise ConfigError(
+                    f"target_runtime.refresh.rules[{index}].paths "
+                    "must be a non-empty list"
+                )
+            if not isinstance(actions_raw_rule, list) or not actions_raw_rule:
+                raise ConfigError(
+                    f"target_runtime.refresh.rules[{index}].actions "
+                    "must be a non-empty list"
+                )
+            rules.append(
+                RuntimeRefreshRuleConfig(
+                    paths=tuple(str(item) for item in paths_raw),
+                    actions=tuple(str(item) for item in actions_raw_rule),
+                )
+            )
+    if not actions:
+        return None
+    return RuntimeRefreshConfig(actions=actions, rules=tuple(rules))
+
+
 def _parse_docker_compose_runtime(data: object) -> DockerComposeRuntimeConfig:
     if data is None:
         return DockerComposeRuntimeConfig()
@@ -615,6 +692,7 @@ def _parse_docker_compose_runtime(data: object) -> DockerComposeRuntimeConfig:
     env_files = mapping.get("env_files", ())
     profiles = mapping.get("profiles", ())
     services = mapping.get("services", ())
+    refresh = _parse_runtime_refresh(mapping.get("refresh"))
     return DockerComposeRuntimeConfig(
         cwd=str(mapping.get("cwd", ".")),
         project_name=(
@@ -632,6 +710,7 @@ def _parse_docker_compose_runtime(data: object) -> DockerComposeRuntimeConfig:
         health_checks=_parse_runtime_health_checks(
             mapping.get("health_checks")
         ),
+        refresh=refresh,
     )
 
 
@@ -640,6 +719,11 @@ def _parse_target_runtime(data: object) -> TargetRuntimeConfig:
         return TargetRuntimeConfig()
     mapping = _require_mapping(data, "target_runtime")
     backend = str(mapping.get("backend", "none"))
+    if backend != "docker_compose" and mapping.get("refresh") is not None:
+        raise ConfigError(
+            "target_runtime.refresh requires target_runtime.backend "
+            "docker_compose"
+        )
     docker_raw = mapping
     if mapping.get("compose_files") is None and mapping.get("docker_compose"):
         docker_raw = mapping.get("docker_compose")
@@ -654,6 +738,10 @@ def _parse_target_runtime(data: object) -> TargetRuntimeConfig:
     docker_compose = None
     if backend == "docker_compose":
         docker_compose = _parse_docker_compose_runtime(docker_raw)
+        if docker_compose.refresh is None:
+            refresh = _parse_runtime_refresh(mapping.get("refresh"))
+            if refresh is not None:
+                docker_compose = evolve(docker_compose, refresh=refresh)
     return TargetRuntimeConfig(backend=backend, docker_compose=docker_compose)
 
 

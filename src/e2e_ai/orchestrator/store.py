@@ -85,6 +85,84 @@ def set_plan_outcome(
     conn.commit()
 
 
+def begin_agent_invocation(
+    conn: sqlite3.Connection,
+    *,
+    invocation_id: str,
+    run_id: str,
+    role: str,
+    agent_id: str,
+    command: list[str],
+    test_id: str | None = None,
+    stdout_path: str | None = None,
+    stderr_path: str | None = None,
+    provider_order: list[str] | None = None,
+    switch_reason: str | None = None,
+    failover_retry: bool = False,
+    started_at: str | None = None,
+) -> str:
+    """Insert an in-flight agent invocation row."""
+
+    started = started_at or _now()
+    conn.execute(
+        """
+        INSERT INTO agent_invocations (
+            id, run_id, test_id, role, agent_id, command_json, status,
+            started_at, finished_at, exit_code, stdout_path, stderr_path,
+            provider_order_json, exit_class, switch_reason, failover_retry
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            invocation_id,
+            run_id,
+            test_id,
+            role,
+            agent_id,
+            json.dumps(command),
+            "running",
+            started,
+            None,
+            None,
+            stdout_path,
+            stderr_path,
+            json.dumps(provider_order) if provider_order is not None else None,
+            None,
+            switch_reason,
+            1 if failover_retry else 0,
+        ),
+    )
+    conn.commit()
+    return invocation_id
+
+
+def finish_agent_invocation(
+    conn: sqlite3.Connection,
+    invocation_id: str,
+    *,
+    status: str,
+    exit_code: int | None,
+    exit_class: str | None = None,
+    finished_at: str | None = None,
+) -> None:
+    """Mark an agent invocation complete."""
+
+    conn.execute(
+        """
+        UPDATE agent_invocations
+        SET status = ?, finished_at = ?, exit_code = ?, exit_class = ?
+        WHERE id = ?
+        """,
+        (
+            status,
+            finished_at or _now(),
+            exit_code,
+            exit_class,
+            invocation_id,
+        ),
+    )
+    conn.commit()
+
+
 def record_agent_invocation(
     conn: sqlite3.Connection,
     *,
@@ -101,39 +179,36 @@ def record_agent_invocation(
     exit_class: str | None = None,
     switch_reason: str | None = None,
     failover_retry: bool = False,
+    invocation_id: str | None = None,
 ) -> str:
-    """Persist one agent invocation."""
+    """Persist one completed agent invocation (test helper)."""
 
-    invocation_id = _new_id("agent")
-    conn.execute(
-        """
-        INSERT INTO agent_invocations (
-            id, run_id, test_id, role, agent_id, command_json, status,
-            started_at, finished_at, exit_code, stdout_path, stderr_path,
-            provider_order_json, exit_class, switch_reason, failover_retry
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            invocation_id,
-            run_id,
-            test_id,
-            role,
-            agent_id,
-            json.dumps(command),
-            status,
-            _now(),
-            _now(),
-            exit_code,
-            stdout_path,
-            stderr_path,
-            json.dumps(provider_order) if provider_order is not None else None,
-            exit_class,
-            switch_reason,
-            1 if failover_retry else 0,
-        ),
+    inv_id = invocation_id or _new_id("agent")
+    started = _now()
+    begin_agent_invocation(
+        conn,
+        invocation_id=inv_id,
+        run_id=run_id,
+        role=role,
+        agent_id=agent_id,
+        command=command,
+        test_id=test_id,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        provider_order=provider_order,
+        switch_reason=switch_reason,
+        failover_retry=failover_retry,
+        started_at=started,
     )
-    conn.commit()
-    return invocation_id
+    finish_agent_invocation(
+        conn,
+        inv_id,
+        status=status,
+        exit_code=exit_code,
+        exit_class=exit_class,
+        finished_at=started,
+    )
+    return inv_id
 
 
 def has_ever_passed(conn: sqlite3.Connection, test_id: str) -> bool:

@@ -7,8 +7,25 @@ import textwrap
 
 from ..analysis.context import RepairContext
 from ..config import EffectiveConfig
+from ..config.models import RuntimeRefreshConfig
 from ..config.target import resolve_surface_path
 from ..inventory.models import DiscoveredTest
+
+
+def _runtime_refresh_block(refresh: RuntimeRefreshConfig | None) -> str:
+    if refresh is None or not refresh.actions:
+        return (
+            "Runtime refresh actions: none configured. Return an empty "
+            "runtime_refresh_actions list in your structured result."
+        )
+    lines = [
+        "Runtime refresh actions (choose any that apply; use [] when none):",
+    ]
+    for name, action in refresh.actions.items():
+        description = action.description.strip() or "(no description)"
+        lines.append(f"- {name}: {description}")
+    return "\n".join(lines)
+
 
 MAX_IMPLEMENTER_PLAN_CHARS = 200_000
 
@@ -256,6 +273,12 @@ def build_implementer_prompt(
         - Edit only surfaces allowed by target.scope (see below).
         - Run verification commands from the plan if practical, but the
           orchestrator will rerun the targeted test independently.
+        - End with structured output including runtime_refresh_actions: a
+          list of configured runtime refresh action names that must run before
+          the orchestrator reruns Playwright. Use [] when no container refresh
+          is needed.
+
+        %s
 
         %s
 
@@ -265,7 +288,7 @@ def build_implementer_prompt(
         %s
         ----- END PLAN -----
 
-        When done, list files you changed.
+        Structured result must include runtime_refresh_actions (possibly []).
         """
         )
         % (
@@ -273,6 +296,11 @@ def build_implementer_prompt(
             spec_file,
             title,
             _target_scope_block(config),
+            _runtime_refresh_block(
+                config.target_runtime.docker_compose.refresh
+                if config.target_runtime.docker_compose is not None
+                else None
+            ),
             files_hint,
             compact_plan.strip(),
         )

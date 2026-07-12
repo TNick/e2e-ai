@@ -175,6 +175,8 @@ repair options are available either way.
   invoke the agent CLIs (no tokens spent). Useful for inspecting what the loop
   would send.
 - `--dry-run` — alias for `--dry-run-agents`.
+- `--verbose-agents` — stream agent progress lines to the terminal while
+  planner/implementer/instrumenter CLIs run (off by default).
 - `--failed-only` — repair only tests that did not pass in the most recent
   finished run with recorded attempts (for example after `e2e-ai run --all`).
   Tests that were not part of that run are skipped. When every test passed in
@@ -261,7 +263,8 @@ readiness. Exits `1` if any required agent is not logged in, `0` otherwise.
 Start a **local, read-only web monitor** for the state database. It serves a
 bundled dashboard (no Node.js required at runtime) that browses runs, tests,
 attempts, failures, plans, and agent invocations, shows live activity per
-shard/runner/environment, and can launch the other `e2e-ai` commands through
+shard/runner/environment and running agent invocations with streaming logs in
+the agent detail drawer, and can launch the other `e2e-ai` commands through
 validated option forms (never a shell). Database access is strictly read-only.
 
 Requires the optional monitor extra: `pip install "e2e-ai[monitor]"`. Without it
@@ -355,6 +358,33 @@ edit:
 Exclude patterns are **regular expressions** matched against each test's
 selector, spec file, title, and id. See [`examples/`](examples/) for a full
 project config and a user config.
+
+### Target runtime refresh
+
+When `target_runtime.backend` is `docker_compose`, an optional
+`target_runtime.refresh` section declares named Compose actions and path rules.
+After a successful implementer round, e2e-ai compares git worktree snapshots
+from the start of the implementer failover sequence to the end, matches changed
+paths against `refresh.rules`, unions any valid implementer
+`runtime_refresh_actions` hints from the structured result, and runs the
+selected actions once (in configuration order) before the next Playwright
+attempt. Unknown action names from the agent are logged and ignored; agents
+cannot supply raw Compose arguments.
+
+Each action needs a `description` and one or more `compose` argv arrays
+(appended to the configured compose files, project name, cwd, env files, and
+profiles). Rules map path globs (project-relative POSIX paths) to action names.
+Unmatched changes (for example edits under `e2e/` only) trigger no refresh.
+Refresh failures and post-refresh health-check failures stop the test as an
+external runtime blocker. A `refresh-report.json` artifact is written under the
+run's runtime work directory.
+
+The implementer structured output schema requires
+`runtime_refresh_actions: string[]` (use `[]` when no container refresh is
+needed). The implementer prompt lists configured action names and
+descriptions. See [`examples/fr-two.e2e-ai.yml`](examples/fr-two.e2e-ai.yml)
+for a full-stack example (frontend rebuild, backend restart/rebuild, seed, and
+runtime-config restarts).
 
 ## Docker / per-test database isolation
 

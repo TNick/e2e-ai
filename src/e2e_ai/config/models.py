@@ -250,6 +250,34 @@ class RuntimeHealthCheckConfig:
 
 
 @define
+class RuntimeRefreshActionConfig:
+    """One named Docker Compose refresh action."""
+
+    description: str = field(default="")
+    compose: tuple[tuple[str, ...], ...] = field(factory=tuple)
+
+
+@define
+class RuntimeRefreshRuleConfig:
+    """Map changed-path globs to refresh action names."""
+
+    paths: tuple[str, ...] = field(factory=tuple)
+    actions: tuple[str, ...] = field(factory=tuple)
+
+
+@define
+class RuntimeRefreshConfig:
+    """Post-implement target runtime refresh policy."""
+
+    actions: Mapping[str, RuntimeRefreshActionConfig] = field(factory=dict)
+    rules: tuple[RuntimeRefreshRuleConfig, ...] = field(factory=tuple)
+
+    @property
+    def action_order(self) -> tuple[str, ...]:
+        return tuple(self.actions.keys())
+
+
+@define
 class DockerComposeRuntimeConfig:
     """Docker Compose target runtime settings."""
 
@@ -263,6 +291,7 @@ class DockerComposeRuntimeConfig:
     start: RuntimeStartConfig = field(factory=RuntimeStartConfig)
     stop: RuntimeStopConfig = field(factory=RuntimeStopConfig)
     health_checks: tuple[RuntimeHealthCheckConfig, ...] = field(factory=tuple)
+    refresh: RuntimeRefreshConfig | None = field(default=None)
 
 
 @define

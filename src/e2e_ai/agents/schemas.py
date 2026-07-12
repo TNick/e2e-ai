@@ -21,6 +21,8 @@ class PlanRequest:
     profile: str | None = field(default=None)
     require_schema: bool = field(default=True)
     mcp: AgentMcpAttachment | None = field(default=None)
+    invocation_id: str | None = field(default=None)
+    output_path: Path | None = field(default=None)
 
 
 @define
@@ -34,6 +36,8 @@ class ImplementRequest:
     profile: str | None = field(default=None)
     isolated_workspace: bool = field(default=False)
     mcp: AgentMcpAttachment | None = field(default=None)
+    invocation_id: str | None = field(default=None)
+    output_path: Path | None = field(default=None)
 
 
 @define
@@ -47,6 +51,8 @@ class InstrumentRequest:
     profile: str | None = field(default=None)
     require_schema: bool = field(default=True)
     mcp: AgentMcpAttachment | None = field(default=None)
+    invocation_id: str | None = field(default=None)
+    output_path: Path | None = field(default=None)
 
 
 def plan_output_schema() -> dict[str, object]:
@@ -92,12 +98,17 @@ def implementation_output_schema() -> dict[str, object]:
         "required": [
             "summary",
             "changed_files",
+            "runtime_refresh_actions",
             "verification_performed",
             "remaining_risk",
         ],
         "properties": {
             "summary": {"type": "string"},
             "changed_files": {"type": "array", "items": {"type": "string"}},
+            "runtime_refresh_actions": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "verification_performed": {
                 "type": "array",
                 "items": {"type": "string"},

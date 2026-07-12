@@ -39,9 +39,28 @@ All notable changes to this project will be documented in this file.
 - Opt-in live agent contract tests (`tests/live_agents_test.py`) gated by
   `E2E_AI_LIVE_AGENT_TESTS` invoke real Codex, Claude, and Cursor CLIs through
   the production plugin path.
+- Live agent invocation streaming: agent rows appear in the monitor while a CLI
+  is running (`status=running`, blank Finished column), with live log tailing in
+  the agent detail drawer via `GET /api/agents/{id}/output` and a Running agents
+  section on the Active page.
+- `e2e-ai repair --verbose-agents` streams concise agent progress lines to the
+  terminal while planner/implementer/instrumenter CLIs run.
+- Config-driven Docker runtime refresh: `target_runtime.refresh` declares named
+  Compose actions and path rules; after implementation e2e-ai diffs the git
+  worktree across the implementer failover sequence, runs matched actions (plus
+  valid implementer `runtime_refresh_actions` hints) before the next Playwright
+  attempt, waits for configured health checks, and writes a refresh report
+  artifact.
 
 ### Changed
 
+- Implementer structured output now requires `runtime_refresh_actions`
+  (`string[]`); the prompt lists configured refresh action names when
+  `target_runtime.refresh` is present.
+- User config default for Claude sets ``max_turns: 40`` (double the built-in
+  planner default of 20); project configs are unchanged.
+- Agent invocation `started_at` and `finished_at` timestamps are recorded at
+  subprocess start and completion instead of both being set when the CLI exits.
 - Instrumentation escalation now counts only repair plans and repeated failure
   signatures from the current run; a new run always gets a plan-and-implement
   cycle before the instrumenter is invoked, even when prior runs left history.

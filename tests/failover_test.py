@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -190,15 +191,21 @@ class _Bound:
         log_dir=None,
         env=None,
         mcp=None,
+        invocation_id=None,
+        output_path=None,
     ):
         from e2e_ai.agents.base import AgentRunResult
 
-        _ = workdir, timeout, log_dir, env, mcp
+        _ = timeout, log_dir, env, mcp, invocation_id, output_path
         request = type("R", (), {"prompt": prompt})()
         if "instrumentation agent" in prompt:
             result = self._plugin.instrument(request)
         elif "implementer agent" in prompt:
             result = self._plugin.implement(request)
+            if result.exit_code == 0 and workdir is not None:
+                target = Path(workdir) / "frontend" / "e2e-touch.ts"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("// failover touch\n", encoding="utf-8")
         else:
             result = self._plugin.plan(request)
         return AgentRunResult(
@@ -442,6 +449,27 @@ class TestFailoverLoop:
             project_root=tmp_path,
             state_dir=tmp_path / ".e2e-ai",
         )
+        subprocess.run(
+            ["git", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "e2e-ai@test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "e2e-ai"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         db = tmp_path / "state.sqlite3"
         conn = ensure_database(db)
         _seed_project(conn)
@@ -459,10 +487,6 @@ class TestFailoverLoop:
             lambda cfg, role, plugins, plugin_id=None: _Bound(
                 plugins[plugin_id or "codex"]
             ),
-        )
-        monkeypatch.setattr(
-            "e2e_ai.orchestrator.loop._working_tree_changed",
-            lambda _root: True,
         )
 
         outcome = _invoke_role_with_failover(

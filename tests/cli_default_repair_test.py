@@ -51,5 +51,6 @@ class TestDefaultRepair:
                 "dry_run": True,
                 "start_runtime": True,
                 "failed_only": False,
+                "verbose_agents": False,
             }
         ]

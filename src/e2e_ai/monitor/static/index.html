@@ -711,8 +711,9 @@ const DESCRIPTIONS = {
         <span class="val">instrumenter</span> adds diagnostics on repeat
         failures.</dd>
       <dt>Agent</dt><dd>Configured plugin id (e.g. codex, claude, cursor).</dd>
-      <dt>Status</dt><dd><span class="val">ok</span> or
-        <span class="val">error</span> for the invocation.</dd>
+      <dt>Status</dt><dd><span class="val">running</span> while the CLI is in
+        flight, then <span class="val">ok</span>, <span class="val">error</span>,
+        or <span class="val">interrupted</span> when the process ends.</dd>
       <dt>Exit</dt><dd>Process exit code (blank while running).</dd>
       <dt>Exit class</dt><dd>Normalized failure category used for provider
         failover (auth, quota, timeout, schema, and similar).</dd>
@@ -793,14 +794,34 @@ window.addEventListener("hashchange", () => {
 });
 
 async function viewActive(el) {
-  const [summary, shards] = await Promise.all([api("/summary"), api("/shards")]);
+  const [summary, shards, running] = await Promise.all([
+    api("/summary"),
+    api("/shards"),
+    api("/agents/running"),
+  ]);
   const c = summary.counts || {};
+  let runningHtml = "";
+  if (running.items.length) {
+    runningHtml = `<h2 style="margin-top:14px">Running agents</h2>
+      ${running.items.map((a) => `<div class="card">
+        <div class="row-flex"><b>${esc(a.role)}</b>
+          <span class="pill">${esc(a.agent_id)}</span>
+          <span class="spacer"></span>
+          <span class="${scls(a.status)}">${esc(a.status)}</span></div>
+        <div>${a.test_title
+          ? `<a data-test="${esc(a.test_id)}">${esc(a.test_title)}</a>`
+          : '<span class="muted">—</span>'}</div>
+        <div class="muted">started ${local(a.started_at)} ·
+          <a data-agent="${esc(a.id)}">${esc(a.id)}</a></div>
+      </div>`).join("")}`;
+  }
   el.innerHTML = `<h2>Active</h2>
     <div class="grid">
       ${card("Runnable tests", c.runnable)}${card("Runs", c.runs)}
       ${card("Attempts", c.attempts)}${card("Active attempts", summary.active_attempts)}
-      ${card("Failures", c.failures)}
+      ${card("Active agents", summary.active_agents || 0)}${card("Failures", c.failures)}
     </div>
+    ${runningHtml}
     <h2 style="margin-top:14px">Live shards / runners</h2>
     ${shards.items.length ? shards.items.map(shardCard).join("") :
       '<div class="card muted">No active attempts. Start a run from Commands.</div>'}`;
@@ -938,7 +959,8 @@ async function viewAgents(el) {
   const g = await api("/agents");
   const table = renderTable("agents", [
     { label: "Started", type: "date", val: (x) => x.started_at, cell: (x) => local(x.started_at) },
-    { label: "Finished", type: "date", val: (x) => x.finished_at, cell: (x) => local(x.finished_at) },
+    { label: "Finished", type: "date", val: (x) => x.finished_at,
+      cell: (x) => x.finished_at ? local(x.finished_at) : '<span class="muted">—</span>' },
     { label: "Role", type: "str", val: (x) => x.role },
     { label: "Agent", type: "str", val: (x) => x.agent_id },
     { label: "Test", type: "str", val: (x) => x.test_title || "", cell: (x) => x.test_id
@@ -952,14 +974,15 @@ async function viewAgents(el) {
   ], g.items, { filter: { label: "Status", val: (x) => x.status } });
   el.innerHTML = pageHeader("agents", "Agent invocations", DESCRIPTIONS.agents) + table;
 }
-async function showAgent(id) {
-  state.drawerRender = () => showAgent(id);
-  const a = await api("/agents/" + encodeURIComponent(id));
+let outTimer = null;
+let agentOutTimer = null;
+
+function _renderAgentDrawerBody(a, out) {
   const meta = [
     `<span class="${scls(a.status)}">${esc(a.status)}</span>`,
     a.exit_code != null ? `exit ${esc(a.exit_code)}` : "",
     a.exit_class ? esc(a.exit_class) : "",
-    local(a.started_at) + (a.finished_at ? " → " + local(a.finished_at) : ""),
+    local(a.started_at) + (a.finished_at ? " → " + local(a.finished_at) : " → running"),
   ].filter(Boolean).join(" · ");
   let body = `<div class="muted">${meta}</div>`;
   if (a.test) {
@@ -974,19 +997,25 @@ async function showAgent(id) {
       body += `<div class="muted">Outcome: ${esc(a.repair_plan.outcome)}</div>`;
     }
   }
+  const liveOutput = (out && out.output) || (a.stdout || "");
   const planText = (a.repair_plan && a.repair_plan.plan_text || "").trim();
-  const stdoutText = (a.stdout || "").trim();
+  const stdoutText = String(liveOutput || "").trim();
   const showLog = stdoutText && stdoutText !== planText;
-  const logLabel = a.role === "implementer" ? "Implementation log"
+  const running = !a.finished_at;
+  const logLabel = running ? "Live log"
+    : a.role === "implementer" ? "Implementation log"
     : a.role === "instrumenter" ? "Instrumentation plan"
     : showLog ? "Agent log" : "";
-  if (showLog && logLabel) body += `<h3>${logLabel}</h3>${renderAgentLog(a.stdout, a.agent_id)}`;
-  else if (!a.repair_plan && stdoutText) {
-    body += `<h3>${logLabel || "Output"}</h3>${renderAgentLog(a.stdout, a.agent_id)}`;
+  if (showLog && logLabel) {
+    body += `<h3>${logLabel}</h3>${renderAgentLog(liveOutput, a.agent_id)}`;
+  } else if (!a.repair_plan && stdoutText) {
+    body += `<h3>${logLabel || "Output"}</h3>${renderAgentLog(liveOutput, a.agent_id)}`;
   }
   if (a.stderr) body += `<h3>Stderr</h3>${renderAgentLog(a.stderr, a.agent_id)}`;
   if (!a.repair_plan && !stdoutText && !a.stderr) {
-    body += '<div class="muted" style="margin-top:8px">No output recorded.</div>';
+    body += running
+      ? '<div class="muted" style="margin-top:8px">Waiting for agent output…</div>'
+      : '<div class="muted" style="margin-top:8px">No output recorded.</div>';
   }
   if (a.command) {
     body += `<h3>Command</h3><pre>${esc(JSON.stringify(a.command, null, 2))}</pre>`;
@@ -997,7 +1026,21 @@ async function showAgent(id) {
   if (a.stdout_path) {
     body += `<div class="muted">Log: <span class="copy" data-copy="${esc(a.stdout_path)}">${esc(a.stdout_path)} ⧉</span></div>`;
   }
-  openDrawer(`${esc(a.role)} · ${esc(a.agent_id)}`, body);
+  return body;
+}
+
+async function showAgent(id) {
+  state.drawerRender = () => showAgent(id);
+  clearInterval(agentOutTimer);
+  const draw = async () => {
+    const [a, out] = await Promise.all([
+      api("/agents/" + encodeURIComponent(id)),
+      api("/agents/" + encodeURIComponent(id) + "/output"),
+    ]);
+    openDrawer(`${esc(a.role)} · ${esc(a.agent_id)}`, _renderAgentDrawerBody(a, out));
+    if (!a.finished_at) agentOutTimer = setTimeout(draw, 1000);
+  };
+  draw();
 }
 
 // ── Commands + options forms ────────────────────────────────────────────────
@@ -1076,7 +1119,6 @@ async function submitCommand(c) {
     btn.disabled = false;
   }
 }
-let outTimer = null;
 async function showOutput(id) {
   state.drawerRender = null;
   clearInterval(outTimer);
@@ -1207,13 +1249,16 @@ async function render(showLoading = true) {
 // dashboard does not flicker every second. Commands is refreshed whenever a
 // monitor-launched command is still running (its status lives outside SQLite).
 async function tick() {
-  let rev;
-  try { rev = (await api("/summary")).revision; } catch { return; }
+  let summary;
+  try { summary = await api("/summary"); } catch { return; }
+  const rev = summary.revision;
   let live = false;
   if (state.view === "commands") {
     try { live = (await api("/command-runs")).items.some((r) => r.status === "running"); }
     catch { live = false; }
   }
+  const activeAgents = Number(summary.active_agents || 0);
+  if (activeAgents > 0) live = true;
   if (rev === state.rev && !live) return;
   state.rev = rev;
   render(false);

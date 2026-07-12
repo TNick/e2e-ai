@@ -87,6 +87,7 @@ def invoke_argv(
     tools_allow: Sequence[str] | None = None,
     tools_deny: Sequence[str] | None = None,
     cleanup_paths: Sequence[Path] | None = None,
+    output_path: Path | None = None,
 ) -> AgentResult:
     """Run one argv list and return a normalized :class:`AgentResult`."""
 
@@ -113,14 +114,14 @@ def invoke_argv(
         tools_deny=tools_deny,
     )
 
-    output_path: Path | None = None
-    if log_dir is not None:
+    resolved_output: Path | None = output_path
+    if resolved_output is None and log_dir is not None:
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         suffix = f"{int(time.time() * 1000) % 100000:05d}"
-        output_path = log_dir / (f"{agent_id}-{stamp}-{suffix}.log")
+        resolved_output = log_dir / (f"{agent_id}-{stamp}-{suffix}.log")
 
-    stdout_path = output_path or (cwd / ".e2e-ai-agent-stdout.log")
+    stdout_path = resolved_output or (cwd / ".e2e-ai-agent-stdout.log")
     stderr_path = stdout_path
     try:
         exit_code = run_agent_command(
@@ -154,7 +155,7 @@ def invoke_argv(
         stdout=stdout.strip(),
         stderr=stderr.strip(),
         exit_class=exit_class,
-        output_path=output_path,
+        output_path=resolved_output,
         timed_out=timed_out,
         quota_before=quota_before,
         quota_after=quota_before,
@@ -320,6 +321,7 @@ class BaseCLIPlugin:
             timeout_seconds=request.timeout_seconds,
             log_dir=request.log_dir,
             quota_before=snap.state,
+            output_path=request.output_path,
             **self._mcp_invoke_kwargs(request),
         )
 
@@ -336,6 +338,7 @@ class BaseCLIPlugin:
             timeout_seconds=request.timeout_seconds,
             log_dir=request.log_dir,
             quota_before=snap.state,
+            output_path=request.output_path,
             **self._mcp_invoke_kwargs(request),
         )
 
@@ -355,6 +358,7 @@ class BaseCLIPlugin:
             timeout_seconds=request.timeout_seconds,
             log_dir=request.log_dir,
             quota_before=snap.state,
+            output_path=request.output_path,
             **self._mcp_invoke_kwargs(request),
         )
 
@@ -383,6 +387,8 @@ class BaseCLIPlugin:
                 log_dir=request.log_dir,
                 profile=request.profile,
                 require_schema=request.require_schema,
+                invocation_id=request.invocation_id,
+                output_path=request.output_path,
             ),
             schema=schema,
         )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+import subprocess
 import textwrap
 from pathlib import Path
 
@@ -30,6 +31,8 @@ PROJECT_YAML = textwrap.dedent(
       list_command: [echo, list]
       run_command: [echo, run]
     exclude: {tests: []}
+    repair_policy:
+      max_attempts_per_test: 3
     agents:
       planner: {plugin: claude}
       implementer: {plugin: codex}
@@ -47,9 +50,34 @@ TEST = DiscoveredTest(
 )
 
 
+def _init_git_repo(root: Path) -> None:
+    subprocess.run(
+        ["git", "init"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "e2e-ai@test"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "e2e-ai"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _config(tmp_path: Path):
     (tmp_path / "e2e").mkdir()
     (tmp_path / "e2e-ai.yml").write_text(PROJECT_YAML, encoding="utf-8")
+    _init_git_repo(tmp_path)
     return load_effective_config(tmp_path)
 
 
@@ -134,8 +162,12 @@ class _FakeAgent:
             exit_class=classify_agent_exit(0, self.plan_text, ""),
         )
 
-    def implement(self, request):
+    def implement(self, request, *, workdir: Path | None = None):
         self.calls.append(request.prompt)
+        if workdir is not None:
+            target = workdir / "frontend" / "e2e-touch.ts"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f"// touch {len(self.calls)}\n", encoding="utf-8")
         from e2e_ai.agents.capabilities import AgentResult
         from e2e_ai.agents.invocation import classify_agent_exit
 
@@ -178,7 +210,10 @@ class _LegacyBound:
                 type("R", (), {"prompt": prompt})()
             )
         elif "implementer agent" in prompt:
-            result = self._plugin.implement(type("R", (), {"prompt": prompt})())
+            result = self._plugin.implement(
+                type("R", (), {"prompt": prompt})(),
+                workdir=workdir,
+            )
         else:
             result = self._plugin.plan(type("R", (), {"prompt": prompt})())
         return AgentRunResult(

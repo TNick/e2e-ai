@@ -101,6 +101,11 @@ def _repair_options(func):
         help="Alias for --dry-run-agents.",
     )(func)
     func = click.option(
+        "--verbose-agents",
+        is_flag=True,
+        help="Stream agent progress lines to the terminal while CLIs run.",
+    )(func)
+    func = click.option(
         "--failed-only",
         is_flag=True,
         help=(
@@ -128,6 +133,7 @@ def _run_repair(
     dry_run: bool,
     start_runtime: bool,
     failed_only: bool,
+    verbose_agents: bool,
 ) -> None:
     """Run the repair loop using the shared CLI options."""
 
@@ -164,6 +170,7 @@ def _run_repair(
             backend=backend,
             reporter=default_reporter,
             dry_run=agents_dry,
+            verbose_agents=verbose_agents,
         )
         loop.ensure_dirs()
         summary = loop.run(
@@ -227,6 +234,7 @@ def build_cli() -> click.Group:
         dry_run: bool,
         start_runtime: bool,
         failed_only: bool,
+        verbose_agents: bool,
     ) -> None:
         """AI-driven Playwright e2e repair loop."""
 
@@ -248,6 +256,7 @@ def build_cli() -> click.Group:
                 dry_run=dry_run,
                 start_runtime=start_runtime,
                 failed_only=failed_only,
+                verbose_agents=verbose_agents,
             )
 
     # ── doctor ──────────────────────────────────────────────────────────────
@@ -509,6 +518,7 @@ def build_cli() -> click.Group:
         dry_run: bool,
         start_runtime: bool,
         failed_only: bool,
+        verbose_agents: bool,
     ) -> None:
         """Run the AI fix loop until tests pass or are judged unsolvable."""
         _run_repair(
@@ -522,6 +532,7 @@ def build_cli() -> click.Group:
             dry_run=dry_run,
             start_runtime=start_runtime,
             failed_only=failed_only,
+            verbose_agents=verbose_agents,
         )
 
     # ── agents ──────────────────────────────────────────────────────────────

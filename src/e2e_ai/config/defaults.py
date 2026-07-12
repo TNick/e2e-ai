@@ -14,7 +14,9 @@ from .models import (
 DEFAULT_USER_CONFIG = UserConfig(
     agents=(
         AgentConfig(id="codex", enabled=True, executable="codex"),
-        AgentConfig(id="claude", enabled=True, executable="claude"),
+        AgentConfig(
+            id="claude", enabled=True, executable="claude", max_turns=40
+        ),
         AgentConfig(id="cursor", enabled=True, executable="agent"),
     ),
     routing=RoutingConfig(),
@@ -34,6 +36,7 @@ agents:
   claude:
     enabled: true
     executable: claude
+    max_turns: 40
   cursor:
     enabled: true
     executable: agent
