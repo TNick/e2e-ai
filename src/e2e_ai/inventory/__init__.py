@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from .models import DiscoveredTest, DiscoveryCounts, TestInventory
-from .playwright_list import build_test_id, parse_playwright_list, run_playwright_list
+from .playwright_list import (
+    build_test_id,
+    parse_playwright_list,
+    run_playwright_list,
+)
 from .store import (
     apply_excludes,
     discover_inventory,

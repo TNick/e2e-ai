@@ -33,7 +33,9 @@ def _signature(error_message: str) -> str:
     head = text[0] if text else ""
     normalized = re.sub(r"0x[0-9a-fA-F]+|\d+", "#", head.lower())
     normalized = re.sub(r"[a-z]:[\\/][^\s]+|/[^\s]+", "<path>", normalized)
-    digest = hashlib.blake2b(normalized.encode("utf-8"), digest_size=8).hexdigest()
+    digest = hashlib.blake2b(
+        normalized.encode("utf-8"), digest_size=8
+    ).hexdigest()
     return digest
 
 
@@ -81,7 +83,10 @@ class RepairStore:
         self, run_id: str, *, status: str, reason: str | None = None
     ) -> None:
         self._conn.execute(
-            "UPDATE runs SET finished_at = ?, status = ?, reason = ? WHERE id = ?",
+            (
+                "UPDATE runs SET finished_at = ?, status = ?, reason = ?"
+                " WHERE id = ?"
+            ),
             (_now(), status, reason, run_id),
         )
         self._commit()
@@ -106,7 +111,7 @@ class RepairStore:
         return str(row["id"]) if row is not None else None
 
     def test_ids_not_passed_in_run(self, run_id: str) -> set[str]:
-        """Return test ids attempted in ``run_id`` that never passed in that run."""
+        """Return test ids attempted in ``run_id`` that never passed there."""
 
         rows = self._conn.execute(
             """
@@ -124,7 +129,10 @@ class RepairStore:
     # only reads them (below) and owns failures, plans, and agent invocations.
     def has_ever_passed(self, test_id: str) -> bool:
         row = self._conn.execute(
-            "SELECT 1 FROM attempts WHERE test_id = ? AND status = 'passed' LIMIT 1",
+            (
+                "SELECT 1 FROM attempts WHERE test_id = ?"
+                " AND status = 'passed' LIMIT 1"
+            ),
             (test_id,),
         ).fetchone()
         return row is not None
@@ -136,7 +144,8 @@ class RepairStore:
         self._conn.execute(
             """
             INSERT INTO failure_packets (
-                id, attempt_id, signature, error_message, payload_json, created_at
+                id, attempt_id, signature, error_message, payload_json,
+                created_at
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
@@ -205,7 +214,9 @@ class RepairStore:
         )
         self._commit()
 
-    def previous_plans(self, test_id: str, *, limit: int = 10) -> list[PlanRecord]:
+    def previous_plans(
+        self, test_id: str, *, limit: int = 10
+    ) -> list[PlanRecord]:
         """Return prior plans for a test, oldest first (for prompt context)."""
 
         rows = self._conn.execute(
@@ -221,7 +232,9 @@ class RepairStore:
             outcome = "pending"
             if row["result_json"]:
                 try:
-                    outcome = json.loads(row["result_json"]).get("outcome", "pending")
+                    outcome = json.loads(row["result_json"]).get(
+                        "outcome", "pending"
+                    )
                 except (json.JSONDecodeError, TypeError):
                     pass
             records.append(
@@ -276,7 +289,9 @@ class RepairStore:
                 exit_code,
                 stdout_path,
                 stderr_path,
-                json.dumps(provider_order) if provider_order is not None else None,
+                json.dumps(provider_order)
+                if provider_order is not None
+                else None,
                 exit_class,
                 switch_reason,
                 1 if failover_retry else 0,

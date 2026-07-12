@@ -73,7 +73,9 @@ def default_fr_two_config() -> dict[str, Any]:
                 "http-cache",
             ],
             "env": {
-                "COMPOSE_PROFILES": "bundled-postgres,seed-data,map-cache,http-cache",
+                "COMPOSE_PROFILES": (
+                    "bundled-postgres,seed-data,map-cache,http-cache"
+                ),
                 "FRTWO_MAP_CACHE_ENABLED": "true",
                 "FRTWO_MAP_CACHE_URL": "http://mapproxy:8080",
                 "FRTWO_RESI_QGIS_RENDER_ENABLED": "true",
@@ -183,7 +185,7 @@ def load_fr_two_raw(config: EffectiveConfig) -> dict[str, Any]:
 
 
 def fr_two_isolation_section(config: EffectiveConfig) -> dict[str, Any]:
-    """Return the fr-two ``isolation`` section (raw), falling back to defaults."""
+    """Return the fr-two ``isolation`` section, falling back to defaults."""
 
     raw = load_fr_two_raw(config)
     isolation = raw.get("isolation")
@@ -216,8 +218,8 @@ def validate_fr_two_config(config: EffectiveConfig) -> None:
         raise ConfigError("fr-two config requires target_runtime")
     if runtime.get("backend") != "docker_compose":
         raise ConfigError(
-            "fr-two adapter requires target_runtime.backend: docker_compose, got "
-            f"{runtime.get('backend')!r}"
+            "fr-two adapter requires target_runtime.backend: "
+            f"docker_compose, got {runtime.get('backend')!r}"
         )
     health_names = {
         str(item.get("name"))

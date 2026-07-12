@@ -26,7 +26,10 @@ from e2e_ai.orchestrator import (
     validate_transition,
 )
 from e2e_ai.orchestrator.decisions import should_stop_test
-from e2e_ai.orchestrator.loop import _will_start_docker_containers, run_repair_loop
+from e2e_ai.orchestrator.loop import (
+    _will_start_docker_containers,
+    run_repair_loop,
+)
 from e2e_ai.orchestrator.models import (
     STATE_FAILED,
     STATE_INSTRUMENTING,
@@ -96,7 +99,9 @@ def _seeded_conn(config) -> sqlite3.Connection:
     return conn
 
 
-def _result(tmp_path: Path, *, passed: bool, attempt_index: int = 0) -> RunResult:
+def _result(
+    tmp_path: Path, *, passed: bool, attempt_index: int = 0
+) -> RunResult:
     stamp = secrets.token_hex(4)
     work = tmp_path / stamp
     work.mkdir(parents=True, exist_ok=True)
@@ -225,7 +230,9 @@ class _FakeRegistry:
         self._plugins = {
             "claude": _FakeAgent("claude"),
             "codex": _FakeAgent("codex"),
-            "claude-strong": _FakeAgent("claude-strong", "add logging then fix"),
+            "claude-strong": _FakeAgent(
+                "claude-strong", "add logging then fix"
+            ),
         }
         self.agents = {
             "planner": _LegacyBound(self._plugins["claude"]),
@@ -246,10 +253,14 @@ class _LegacyBound:
     def id(self) -> str:
         return self._plugin.id
 
-    def run(self, prompt, *, workdir, timeout, log_dir=None, env=None, mcp=None):
+    def run(
+        self, prompt, *, workdir, timeout, log_dir=None, env=None, mcp=None
+    ):
         _ = workdir, timeout, log_dir, env, mcp
         if "instrumentation agent" in prompt:
-            result = self._plugin.instrument(type("R", (), {"prompt": prompt})())
+            result = self._plugin.instrument(
+                type("R", (), {"prompt": prompt})()
+            )
         elif "implementer agent" in prompt:
             result = self._plugin.implement(type("R", (), {"prompt": prompt})())
         else:
@@ -268,7 +279,9 @@ class TestStateMachine:
         assert next_state(STATE_RUNNING, EVENT_PASS) == STATE_PASSED
         assert next_state(STATE_RUNNING, EVENT_FAIL) == STATE_FAILED
         assert next_state(STATE_FAILED, EVENT_PLAN) == STATE_PLANNING
-        assert next_state(STATE_REGRESSED, EVENT_INSTRUMENT) == STATE_INSTRUMENTING
+        assert (
+            next_state(STATE_REGRESSED, EVENT_INSTRUMENT) == STATE_INSTRUMENTING
+        )
 
     def test_invalid_transition_raises(self):
         with pytest.raises(InvalidTransitionError):
@@ -288,7 +301,9 @@ class TestDecisions:
             test=TEST,
             attempt=_result(tmp_path, passed=False),
             report=None,
-            failure=FailureInfo(error_message="Cannot connect to the Docker daemon"),
+            failure=FailureInfo(
+                error_message="Cannot connect to the Docker daemon"
+            ),
         )
         assert classify_external_blocker(packet, config=config)
 
@@ -357,7 +372,9 @@ class TestDockerStartupMessages:
         base = _config(tmp_path)
         config = evolve(
             base,
-            target_runtime=evolve(base.target_runtime, backend="docker_compose"),
+            target_runtime=evolve(
+                base.target_runtime, backend="docker_compose"
+            ),
         )
         assert _will_start_docker_containers(config, start_runtime=True)
         assert not _will_start_docker_containers(config, start_runtime=False)
@@ -424,7 +441,9 @@ class TestDockerStartupMessages:
         assert row["reason"] == REASON_PROCESS_INTERRUPTED
         conn.close()
 
-    def test_failed_test_invokes_planner_then_implementer(self, tmp_path, monkeypatch):
+    def test_failed_test_invokes_planner_then_implementer(
+        self, tmp_path, monkeypatch
+    ):
         config = _config(tmp_path)
         conn = _seeded_conn(config)
         registry = _FakeRegistry()
@@ -489,7 +508,9 @@ class TestDockerStartupMessages:
         assert len(failing_planner.calls) == 2
         conn.close()
 
-    def test_second_failure_invokes_instrumentation(self, tmp_path, monkeypatch):
+    def test_second_failure_invokes_instrumentation(
+        self, tmp_path, monkeypatch
+    ):
         config = _config(tmp_path)
         conn = _seeded_conn(config)
         registry = _FakeRegistry()
@@ -518,7 +539,9 @@ class TestDockerStartupMessages:
         )
         conn.close()
 
-    def test_regression_gets_previous_failure_context(self, tmp_path, monkeypatch):
+    def test_regression_gets_previous_failure_context(
+        self, tmp_path, monkeypatch
+    ):
         config = _config(tmp_path)
         conn = _seeded_conn(config)
         registry = _FakeRegistry()
@@ -679,7 +702,7 @@ class TestTestHistory:
 
 
 class TestFailedOnlyRepair:
-    """``only_failed`` limits repair to tests that failed in the previous run."""
+    """``only_failed`` limits repair to tests failed in the previous run."""
 
     OTHER = DiscoveredTest(
         id="demo_other123",
@@ -690,7 +713,9 @@ class TestFailedOnlyRepair:
         raw_list_line="b.spec.ts › other thing",
     )
 
-    def test_only_failed_schedules_previous_failures(self, tmp_path, monkeypatch):
+    def test_only_failed_schedules_previous_failures(
+        self, tmp_path, monkeypatch
+    ):
         config = _config(tmp_path)
         conn = ensure_database(database_path(config))
         refresh_inventory(conn, config, Inventory(tests=(TEST, self.OTHER)))
@@ -777,7 +802,9 @@ class TestFailedOnlyRepair:
         assert summary.all_green
         assert summary.run_id is None
         assert run_count == 1
-        assert messages == [f"Scheduling 0 test(s) that failed in run {prev_run}."]
+        assert messages == [
+            f"Scheduling 0 test(s) that failed in run {prev_run}."
+        ]
         conn.close()
 
 
@@ -823,7 +850,9 @@ class TestRepairBudget:
 class TestTargetScopePrompts:
     """Repair prompts include configured edit scope."""
 
-    def test_planner_prompt_includes_frontend_only_scope(self, tmp_path: Path) -> None:
+    def test_planner_prompt_includes_frontend_only_scope(
+        self, tmp_path: Path
+    ) -> None:
         config = _config(tmp_path)
         conn = _seeded_conn(config)
         packet = build_failure_packet(
@@ -841,5 +870,7 @@ class TestTargetScopePrompts:
     def test_plan_is_blocked_reference_backend(self) -> None:
         from e2e_ai.planner import plan_is_blocked
 
-        reason = plan_is_blocked("BLOCKED_REFERENCE_BACKEND: needs API schema change")
+        reason = plan_is_blocked(
+            "BLOCKED_REFERENCE_BACKEND: needs API schema change"
+        )
         assert reason == "needs API schema change"

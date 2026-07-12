@@ -32,7 +32,9 @@ def find_free_port_range(
 
     for attempt in range(50):
         candidate = base + (attempt * step)
-        if all(port_is_free(host, candidate + offset) for offset in range(count)):
+        if all(
+            port_is_free(host, candidate + offset) for offset in range(count)
+        ):
             return candidate
     raise DockerError(
         f"could not find a free automatic port range starting near {base}"

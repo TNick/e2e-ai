@@ -97,7 +97,9 @@ class TestRuntimeConfig:
 
 
 class TestComposeArgv:
-    def test_builds_compose_command_with_files_profiles_services(self, tmp_path: Path):
+    def test_builds_compose_command_with_files_profiles_services(
+        self, tmp_path: Path
+    ):
         config = _runtime_config(tmp_path)
         compose = config.target_runtime.docker_compose
         assert compose is not None
@@ -162,7 +164,9 @@ class TestHealthChecks:
 
 
 class TestDockerComposeRuntime:
-    def test_startup_logs_command_manifest(self, tmp_path: Path, monkeypatch) -> None:
+    def test_startup_logs_command_manifest(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         config = _runtime_config(tmp_path)
         runtime = create_docker_compose_runtime(config)
         context = _context(tmp_path, config)

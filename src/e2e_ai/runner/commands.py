@@ -19,7 +19,7 @@ def _run_argv(config: EffectiveConfig) -> list[str]:
 
 
 def _leaf_title(title: str) -> str:
-    """Return the innermost test title (Playwright ``-g`` matches a substring)."""
+    """Return the innermost test title for Playwright ``-g`` matching."""
 
     return title.split("›")[-1].strip() or title
 
@@ -30,9 +30,9 @@ def build_playwright_test_command(
 ) -> list[str]:
     """Return argv for the narrowest supported Playwright rerun.
 
-    Uses ``<run_command> <spec_file> -g <exact-title>``. The title is passed as a
-    single argv item (no shell quoting). ``--project`` isolates one browser
-    project when the test declares one.
+    Uses ``<run_command> <spec_file> -g <exact-title>``. The title is
+    passed as a single argv item (no shell quoting). ``--project``
+    isolates one browser project when the test declares one.
     """
 
     argv = [*_run_argv(config), test.spec_file, "-g", _leaf_title(test.title)]

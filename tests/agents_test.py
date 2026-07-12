@@ -7,7 +7,11 @@ import subprocess
 from pathlib import Path
 
 from e2e_ai.agents.base import AgentRunResult
-from e2e_ai.agents.capabilities import QUOTA_EXHAUSTED, QUOTA_READY, QUOTA_UNKNOWN
+from e2e_ai.agents.capabilities import (
+    QUOTA_EXHAUSTED,
+    QUOTA_READY,
+    QUOTA_UNKNOWN,
+)
 from e2e_ai.agents.invocation import (
     EXIT_AUTH_ERROR,
     EXIT_QUOTA_ERROR,
@@ -57,7 +61,9 @@ def _config(
         agents=(
             AgentConfig(id="planner", plugin=planner, profile="difficult"),
             AgentConfig(id="implementer", plugin=implementer, profile="cheap"),
-            AgentConfig(id="instrumenter", plugin=instrumenter, profile="difficult"),
+            AgentConfig(
+                id="instrumenter", plugin=instrumenter, profile="difficult"
+            ),
             AgentConfig(id="codex", enabled=True, executable="codex"),
             AgentConfig(id="claude", enabled=True, executable="claude"),
             AgentConfig(id="cursor", enabled=True, executable="agent"),
@@ -102,7 +108,10 @@ class TestAgentExit:
         )
 
     def test_classifies_quota_error(self) -> None:
-        assert classify_agent_exit(1, "rate limit exceeded", "") == EXIT_QUOTA_ERROR
+        assert (
+            classify_agent_exit(1, "rate limit exceeded", "")
+            == EXIT_QUOTA_ERROR
+        )
 
     def test_classifies_codex_usage_limit_jsonl(self) -> None:
         stdout = (
@@ -143,7 +152,10 @@ class TestInvocationExitRouting:
             plan_text=stdout,
         )
         assert exit_class is None
-        assert classify_agent_exit(0, "rate limit exceeded", "") == EXIT_TASK_FAILURE
+        assert (
+            classify_agent_exit(0, "rate limit exceeded", "")
+            == EXIT_TASK_FAILURE
+        )
 
 
 class TestAgentInvocation:
@@ -179,7 +191,9 @@ class TestAgentInvocation:
             seen["stdin"] = kwargs["stdin"]
             return FakeProcess()
 
-        monkeypatch.setattr("e2e_ai.agents.invocation.subprocess.Popen", fake_popen)
+        monkeypatch.setattr(
+            "e2e_ai.agents.invocation.subprocess.Popen", fake_popen
+        )
 
         exit_code = run_agent_command(
             ["agent", "prompt as arg"],
@@ -233,7 +247,9 @@ class TestCodex:
         agent = create_agent_plugins(_config())["codex"]
         assert agent.prompt_transport == "stdin"
 
-    def test_build_exec_argv_uses_schema_file_path(self, tmp_path: Path) -> None:
+    def test_build_exec_argv_uses_schema_file_path(
+        self, tmp_path: Path
+    ) -> None:
         from e2e_ai.agents.plugins.codex import build_exec_argv
 
         schema_path = tmp_path / "plan-schema.json"
@@ -268,7 +284,9 @@ class TestCodex:
         assert argv.count("-p") == 1
         assert argv[argv.index("-p") + 1] == "e2e-ai-mcp-test"
 
-    def test_prepare_codex_mcp_runtime_copies_profile(self, tmp_path: Path) -> None:
+    def test_prepare_codex_mcp_runtime_copies_profile(
+        self, tmp_path: Path
+    ) -> None:
         from e2e_ai.mcp.models import AgentMcpAttachment, McpSessionSpec
 
         client_dir = tmp_path / "client"

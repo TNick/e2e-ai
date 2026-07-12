@@ -12,12 +12,14 @@ def _now() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
-def _seed_run_with_attempts(db_path, *, run_id: str, attempts: list[tuple[str, str]]):
+def _seed_run_with_attempts(
+    db_path, *, run_id: str, attempts: list[tuple[str, str]]
+):
     conn = ensure_database(db_path)
     now = _now()
     conn.execute(
-        "INSERT INTO projects (id, root_path, config_hash, created_at, updated_at)"
-        " VALUES ('demo','/r','h',?,?)",
+        "INSERT INTO projects (id, root_path, config_hash, created_at,"
+        " updated_at) VALUES ('demo','/r','h',?,?)",
         (now, now),
     )
     conn.execute(

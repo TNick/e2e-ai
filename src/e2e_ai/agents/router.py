@@ -123,7 +123,9 @@ def require_required_agents(
     bad = [status for status in statuses if not status.logged_in]
     if bad:
         detail = "; ".join(f"{s.agent_id}: {s.reason}" for s in bad)
-        raise AgentNotLoggedInError(f"the following agents are not logged in: {detail}")
+        raise AgentNotLoggedInError(
+            f"the following agents are not logged in: {detail}"
+        )
     return statuses
 
 
@@ -198,7 +200,8 @@ def select_provider(
     candidates.sort(key=lambda item: item[0], reverse=True)
     if not candidates:
         raise AgentError(
-            f"no healthy agent available for role {role!r} (task_class={task_class})"
+            f"no healthy agent available for role {role!r} "
+            f"(task_class={task_class})"
         )
 
     chosen_id = candidates[0][1]
@@ -207,7 +210,8 @@ def select_provider(
     reserve_quota(chosen.id, task_class, snapshot)
     logger.log(
         1,
-        "selected agent %s for role %s task_class=%s quota=%s failover_retry=%s",
+        "selected agent %s for role %s task_class=%s quota=%s "
+        "failover_retry=%s",
         chosen.id,
         role,
         task_class,

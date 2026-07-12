@@ -205,7 +205,9 @@ class RoutingConfig:
     planner_requires_schema: bool = field(default=True)
     schema_retry_limit: int = field(default=1)
     long_task_min_remaining_percent: int = field(default=25)
-    role_preferences: RolePreferencesConfig = field(factory=RolePreferencesConfig)
+    role_preferences: RolePreferencesConfig = field(
+        factory=RolePreferencesConfig
+    )
     failover: FailoverConfig = field(factory=FailoverConfig)
 
 

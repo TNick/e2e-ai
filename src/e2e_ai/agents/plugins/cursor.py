@@ -26,7 +26,14 @@ def build_plan_argv_list(
 ) -> list[str]:
     """Build argv for planner Cursor requests without ``--force``."""
 
-    argv = [executable, "-p", "--mode", "plan", "--output-format", "stream-json"]
+    argv = [
+        executable,
+        "-p",
+        "--mode",
+        "plan",
+        "--output-format",
+        "stream-json",
+    ]
     if profile_args:
         argv.extend(profile_args)
     return argv

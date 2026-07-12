@@ -61,7 +61,9 @@ def run_probe(
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         return False, str(exc)
-    out = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    out = "\n".join(
+        part for part in (result.stdout, result.stderr) if part
+    ).strip()
     return result.returncode == 0, out[-500:]
 
 

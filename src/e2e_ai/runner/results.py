@@ -12,7 +12,7 @@ from .models import STATUS_FAILED, STATUS_PASSED
 
 
 def load_playwright_json(path: Path) -> dict[str, object]:
-    """Load a Playwright JSON reporter file (empty dict when missing/invalid)."""
+    """Load a Playwright JSON reporter file (empty dict if missing)."""
 
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -92,11 +92,16 @@ def extract_failure(
                     errors = result.get("errors") or (
                         [result["error"]] if result.get("error") else []
                     )
-                    if result.get("status") in ("passed", "skipped") and not errors:
+                    if (
+                        result.get("status") in ("passed", "skipped")
+                        and not errors
+                    ):
                         continue
                     if errors:
                         err = errors[0]
-                        info.error_message = str(err.get("message", "")).strip()[:8000]
+                        info.error_message = str(
+                            err.get("message", "")
+                        ).strip()[:8000]
                         info.stack = str(err.get("stack", "")).strip()[:8000]
                         loc = err.get("location") or {}
                         if loc:

@@ -8,7 +8,9 @@ import textwrap
 from pathlib import Path
 
 from e2e_ai.config import load_effective_config
-from e2e_ai.inventory.models import DiscoveredTest  # noqa: E402  (grouped import)
+from e2e_ai.inventory.models import (
+    DiscoveredTest,  # noqa: E402  (grouped import)
+)
 from e2e_ai.runner.artifacts import (
     write_command_manifest,
     write_environment_manifest,
@@ -61,7 +63,10 @@ class TestCommandBuilder:
         assert "a.spec.ts" in argv
         gi = argv.index("-g")
         assert argv[gi + 1] == "does a thing"
-        assert "--project" in argv and argv[argv.index("--project") + 1] == "chromium"
+        assert (
+            "--project" in argv
+            and argv[argv.index("--project") + 1] == "chromium"
+        )
 
 
 class TestPlaywrightEnv:
@@ -77,8 +82,12 @@ class TestPlaywrightEnv:
         )
         json_a = tmp_path / "a" / "playwright-results.json"
         json_b = tmp_path / "b" / "playwright-results.json"
-        env_a = build_playwright_env(config, request, json_a, tmp_path / "a.zip")
-        env_b = build_playwright_env(config, request, json_b, tmp_path / "b.zip")
+        env_a = build_playwright_env(
+            config, request, json_a, tmp_path / "a.zip"
+        )
+        env_b = build_playwright_env(
+            config, request, json_b, tmp_path / "b.zip"
+        )
         json_env = config.playwright.report_env.json
         blob_env = config.playwright.report_env.blob
         assert env_a[json_env] == str(json_a)
@@ -94,7 +103,10 @@ class TestSubprocess:
             [
                 sys.executable,
                 "-c",
-                "import sys; print('hello out'); print('hello err', file=sys.stderr)",
+                (
+                    "import sys; print('hello out'); "
+                    "print('hello err', file=sys.stderr)"
+                ),
             ],
             cwd=tmp_path,
             env={"PYTHONIOENCODING": "utf-8"},

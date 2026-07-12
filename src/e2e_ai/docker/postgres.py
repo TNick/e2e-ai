@@ -1,4 +1,6 @@
-"""Per-test PostgreSQL database cloning via a Docker Compose ``postgres`` service.
+"""Per-test PostgreSQL database cloning via Docker Compose ``postgres``.
+
+Uses the ``postgres`` service in the target compose stack.
 
 This module re-exports the :mod:`e2e_ai.isolation.docker_postgres` helpers for
 backward compatibility. New code should use :mod:`e2e_ai.isolation` directly.

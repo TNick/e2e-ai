@@ -51,7 +51,7 @@ def write_prompt_file(prompt: str) -> Path:
 
 
 def write_schema_file(schema: dict[str, object]) -> Path:
-    """Write a JSON Schema dict to a temporary file for CLI ``--output-schema``."""
+    """Write a JSON Schema dict to a temp file for ``--output-schema``."""
 
     fd, name = tempfile.mkstemp(prefix="e2e-ai-schema-", suffix=".json")
     os.close(fd)

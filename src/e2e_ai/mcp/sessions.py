@@ -90,7 +90,9 @@ def prepare_agent_mcp_attachment(
         role=role,
         failure_family=family,
     )
-    required = attach and bool(config.playwright_mcp.role_enabled.get(role, False))
+    required = attach and bool(
+        config.playwright_mcp.role_enabled.get(role, False)
+    )
     if not attach:
         return AgentMcpAttachment(enabled=False, required=False)
     if not plugin_supports_mcp:

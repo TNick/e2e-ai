@@ -23,7 +23,9 @@ _MISSING_DB_MESSAGE = (
 _MAX_LOG_BYTES = 512_000
 
 
-def _read_log_file(path: str | None, *, max_bytes: int = _MAX_LOG_BYTES) -> str | None:
+def _read_log_file(
+    path: str | None, *, max_bytes: int = _MAX_LOG_BYTES
+) -> str | None:
     """Return log text from ``path``, or ``None`` when missing/unreadable."""
 
     if not path:
@@ -127,7 +129,8 @@ class MonitorStore:
             message = "state database is missing the schema_version table"
         elif not ok:
             message = (
-                f"schema version {version} != expected {EXPECTED_SCHEMA_VERSION}; "
+                f"schema version {version} != expected "
+                f"{EXPECTED_SCHEMA_VERSION}; "
                 "the monitor may be out of date"
             )
         return {
@@ -141,7 +144,9 @@ class MonitorStore:
 
     # ── summary ─────────────────────────────────────────────────────────────
     def summary(self) -> dict[str, Any]:
-        project = self._row("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 1")
+        project = self._row(
+            "SELECT * FROM projects ORDER BY updated_at DESC LIMIT 1"
+        )
         counts = {
             "tests": self._scalar("SELECT COUNT(*) FROM tests") or 0,
             "runnable": self._scalar(
@@ -150,7 +155,8 @@ class MonitorStore:
             or 0,
             "runs": self._scalar("SELECT COUNT(*) FROM runs") or 0,
             "attempts": self._scalar("SELECT COUNT(*) FROM attempts") or 0,
-            "failures": self._scalar("SELECT COUNT(*) FROM failure_packets") or 0,
+            "failures": self._scalar("SELECT COUNT(*) FROM failure_packets")
+            or 0,
         }
         by_status = {
             row["last_status"] or "unknown": row["n"]
@@ -163,9 +169,14 @@ class MonitorStore:
             "SELECT * FROM runs WHERE status = 'running' "
             "ORDER BY started_at DESC LIMIT 1"
         )
-        latest_run = self._row("SELECT * FROM runs ORDER BY started_at DESC LIMIT 1")
+        latest_run = self._row(
+            "SELECT * FROM runs ORDER BY started_at DESC LIMIT 1"
+        )
         active_attempts = (
-            self._scalar("SELECT COUNT(*) FROM attempts WHERE finished_at IS NULL") or 0
+            self._scalar(
+                "SELECT COUNT(*) FROM attempts WHERE finished_at IS NULL"
+            )
+            or 0
         )
         return {
             "project": project,
@@ -183,7 +194,8 @@ class MonitorStore:
         offset = max(0, int(offset))
         rows = self._rows(
             "SELECT r.*, "
-            "(SELECT COUNT(*) FROM attempts a WHERE a.run_id = r.id) AS attempt_count "
+            "(SELECT COUNT(*) FROM attempts a WHERE a.run_id = r.id) "
+            "AS attempt_count "
             "FROM runs r ORDER BY r.started_at DESC LIMIT ? OFFSET ?",
             (limit, offset),
         )
@@ -201,7 +213,8 @@ class MonitorStore:
             (run_id,),
         )
         agents = self._rows(
-            "SELECT * FROM agent_invocations WHERE run_id = ? ORDER BY started_at",
+            "SELECT * FROM agent_invocations WHERE run_id = ? "
+            "ORDER BY started_at",
             (run_id,),
         )
         for agent in agents:
@@ -299,7 +312,8 @@ class MonitorStore:
 
     def _list_agents_for_test(self, test_id: str) -> list[dict[str, Any]]:
         rows = self._rows(
-            "SELECT * FROM agent_invocations WHERE test_id = ? ORDER BY started_at",
+            "SELECT * FROM agent_invocations WHERE test_id = ? "
+            "ORDER BY started_at",
             (test_id,),
         )
         return [self._normalize_agent_row(row) for row in rows]
@@ -307,7 +321,8 @@ class MonitorStore:
     # ── attempts / failures / agents ────────────────────────────────────────
     def get_attempt(self, attempt_id: str) -> dict[str, Any] | None:
         attempt = self._row(
-            "SELECT a.*, t.title, t.spec_file, t.project_name, r.status AS run_status "
+            "SELECT a.*, t.title, t.spec_file, t.project_name, "
+            "r.status AS run_status "
             "FROM attempts a JOIN tests t ON t.id = a.test_id "
             "JOIN runs r ON r.id = a.run_id WHERE a.id = ?",
             (attempt_id,),
@@ -322,7 +337,9 @@ class MonitorStore:
         return attempt
 
     def get_failure(self, packet_id: str) -> dict[str, Any] | None:
-        packet = self._row("SELECT * FROM failure_packets WHERE id = ?", (packet_id,))
+        packet = self._row(
+            "SELECT * FROM failure_packets WHERE id = ?", (packet_id,)
+        )
         if packet is None:
             return None
         packet["payload"] = _decode_json(packet.pop("payload_json", None))
@@ -331,7 +348,9 @@ class MonitorStore:
     def _normalize_agent_row(self, row: dict[str, Any]) -> dict[str, Any]:
         agent = dict(row)
         agent["command"] = _decode_json(agent.pop("command_json", None))
-        agent["provider_order"] = _decode_json(agent.pop("provider_order_json", None))
+        agent["provider_order"] = _decode_json(
+            agent.pop("provider_order_json", None)
+        )
         agent.pop("quota_snapshot_json", None)
         return agent
 
@@ -350,9 +369,11 @@ class MonitorStore:
         )
         if plan is None:
             plan = self._row(
-                "SELECT id, plan_text, created_at, result_json FROM repair_plans "
+                "SELECT id, plan_text, created_at, result_json "
+                "FROM repair_plans "
                 "WHERE test_id = ? AND agent_id = ? "
-                "ORDER BY ABS(julianday(created_at) - julianday(?)) ASC LIMIT 1",
+                "ORDER BY ABS(julianday(created_at) - "
+                "julianday(?)) ASC LIMIT 1",
                 (test_id, agent_id, started_at),
             )
         if plan is None:
@@ -412,7 +433,8 @@ class MonitorStore:
     # ── active shards ───────────────────────────────────────────────────────
     def active_shards(self) -> list[dict[str, Any]]:
         rows = self._rows(
-            "SELECT a.*, t.title, t.spec_file, t.project_name, r.status AS run_status "
+            "SELECT a.*, t.title, t.spec_file, t.project_name, "
+            "r.status AS run_status "
             "FROM attempts a JOIN tests t ON t.id = a.test_id "
             "JOIN runs r ON r.id = a.run_id "
             "WHERE a.finished_at IS NULL ORDER BY a.started_at DESC"

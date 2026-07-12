@@ -35,7 +35,9 @@ class FailureInfo:
     stdout_tail: str = ""
     stderr_tail: str = ""
     duration_ms: int | None = None
-    attachments: list[str] = field(default_factory=list)  # trace/screenshot paths
+    attachments: list[str] = field(
+        default_factory=list
+    )  # trace/screenshot paths
     location: str = ""  # "file:line:col" where the failure was raised
 
     def is_environmental(self) -> bool:

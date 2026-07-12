@@ -52,9 +52,13 @@ class TestConfigLoader:
         assert codex.executable == "codex"
         assert codex.enabled is True
 
-    def test_project_config_overrides_user_defaults(self, tmp_path: Path) -> None:
+    def test_project_config_overrides_user_defaults(
+        self, tmp_path: Path
+    ) -> None:
         user = UserConfig(
-            agents=(AgentConfig(id="codex", enabled=True, executable="user-codex"),),
+            agents=(
+                AgentConfig(id="codex", enabled=True, executable="user-codex"),
+            ),
             routing=RoutingConfig(allow_canary=True),
         )
         project_file = tmp_path / "e2e-ai.yml"
@@ -73,7 +77,9 @@ class TestConfigLoader:
         assert effective.routing.allow_canary is True
         codex = next(agent for agent in effective.agents if agent.id == "codex")
         assert codex.executable == "user-codex"
-        planner = next(agent for agent in effective.agents if agent.id == "planner")
+        planner = next(
+            agent for agent in effective.agents if agent.id == "planner"
+        )
         assert planner.plugin == "codex"
         assert planner.profile == "difficult"
 
@@ -128,7 +134,9 @@ playwright:
             list_command=CommandSpec(
                 argv=("pnpm", "exec", "playwright", "test", "--list")
             ),
-            run_command=CommandSpec(argv=("pnpm", "exec", "playwright", "test")),
+            run_command=CommandSpec(
+                argv=("pnpm", "exec", "playwright", "test")
+            ),
         )
         config = EffectiveConfig(
             project_id="demo",

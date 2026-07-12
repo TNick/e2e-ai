@@ -31,7 +31,9 @@ def validate_command_spec(command: CommandSpec, label: str) -> None:
 
     if not command.argv:
         raise ConfigError(f"{label} must include at least one argv entry")
-    if any(not isinstance(part, str) or not part.strip() for part in command.argv):
+    if any(
+        not isinstance(part, str) or not part.strip() for part in command.argv
+    ):
         raise ConfigError(f"{label} argv entries must be non-empty strings")
 
 
@@ -83,13 +85,16 @@ def validate_target_config(config: EffectiveConfig) -> None:
 
     if target.scope == "full_stack":
         if not has_editable_backend(target):
-            raise ConfigError("full_stack scope requires an editable backend surface")
+            raise ConfigError(
+                "full_stack scope requires an editable backend surface"
+            )
 
     if target.scope == "frontend_with_backend_reference":
         backend = target.surfaces.get("backend")
         if backend is None:
             raise ConfigError(
-                "frontend_with_backend_reference scope requires a backend surface"
+                "frontend_with_backend_reference scope requires a "
+                "backend surface"
             )
         if backend.editable:
             raise ConfigError(
@@ -120,17 +125,22 @@ def validate_target_runtime(config: EffectiveConfig) -> None:
         compose = runtime.docker_compose
         if compose is None:
             raise ConfigError(
-                "target_runtime.backend docker_compose requires compose settings"
+                "target_runtime.backend docker_compose requires "
+                "compose settings"
             )
         if not compose.compose_files:
             raise ConfigError(
                 "target_runtime.docker_compose.compose_files must not be empty"
             )
         if compose.start.timeout_seconds < 1:
-            raise ConfigError("target_runtime.start.timeout_seconds must be at least 1")
+            raise ConfigError(
+                "target_runtime.start.timeout_seconds must be at least 1"
+            )
         if compose.stop.policy not in VALID_RUNTIME_STOP_POLICIES:
             allowed = ", ".join(sorted(VALID_RUNTIME_STOP_POLICIES))
-            raise ConfigError(f"target_runtime.stop.policy must be one of: {allowed}")
+            raise ConfigError(
+                f"target_runtime.stop.policy must be one of: {allowed}"
+            )
         seen: set[str] = set()
         for check in compose.health_checks:
             if check.name in seen:
@@ -141,11 +151,13 @@ def validate_target_runtime(config: EffectiveConfig) -> None:
             if check.kind not in VALID_RUNTIME_HEALTH_CHECK_KINDS:
                 allowed = ", ".join(sorted(VALID_RUNTIME_HEALTH_CHECK_KINDS))
                 raise ConfigError(
-                    f"health check {check.name!r} kind must be one of: {allowed}"
+                    f"health check {check.name!r} kind must be one of: "
+                    f"{allowed}"
                 )
             if check.timeout_seconds < 1:
                 raise ConfigError(
-                    f"health check {check.name!r} timeout_seconds must be at least 1"
+                    f"health check {check.name!r} timeout_seconds "
+                    "must be at least 1"
                 )
             if check.kind == "http" and not check.url:
                 raise ConfigError(
@@ -154,15 +166,18 @@ def validate_target_runtime(config: EffectiveConfig) -> None:
             if check.kind == "tcp":
                 if not check.host:
                     raise ConfigError(
-                        f"health check {check.name!r} requires host for tcp kind"
+                        f"health check {check.name!r} requires host "
+                        "for tcp kind"
                     )
                 if check.port is None:
                     raise ConfigError(
-                        f"health check {check.name!r} requires port for tcp kind"
+                        f"health check {check.name!r} requires port "
+                        "for tcp kind"
                     )
             if check.kind == "command" and not check.argv:
                 raise ConfigError(
-                    f"health check {check.name!r} requires argv for command kind"
+                    f"health check {check.name!r} requires argv "
+                    "for command kind"
                 )
 
 
@@ -186,7 +201,10 @@ def validate_effective_config(config: EffectiveConfig) -> None:
         "playwright.run_command",
     )
 
-    if config.full_verification is not None and config.full_verification.command:
+    if (
+        config.full_verification is not None
+        and config.full_verification.command
+    ):
         validate_command_spec(
             config.full_verification.command,
             "full_verification.command",
@@ -206,14 +224,19 @@ def validate_effective_config(config: EffectiveConfig) -> None:
         if agent.id in seen_ids:
             raise ConfigError(f"duplicate agent id {agent.id!r}")
         seen_ids.add(agent.id)
-        if agent.plugin is not None and agent.plugin not in BUILTIN_AGENT_PLUGINS:
+        if (
+            agent.plugin is not None
+            and agent.plugin not in BUILTIN_AGENT_PLUGINS
+        ):
             raise ConfigError(
                 f"unknown agent plugin {agent.plugin!r} for {agent.id!r}; "
                 f"expected one of: {', '.join(sorted(BUILTIN_AGENT_PLUGINS))}"
             )
 
     if config.repair_policy.max_attempts_per_test < 0:
-        raise ConfigError("repair_policy.max_attempts_per_test must not be negative")
+        raise ConfigError(
+            "repair_policy.max_attempts_per_test must not be negative"
+        )
     if config.repair_policy.max_same_signature_attempts < 1:
         raise ConfigError(
             "repair_policy.max_same_signature_attempts must be at least 1"
@@ -252,7 +275,9 @@ def validate_effective_config(config: EffectiveConfig) -> None:
 
     failover = config.routing.failover
     if failover.max_switches_per_test < 0:
-        raise ConfigError("routing.failover.max_switches_per_test must not be negative")
+        raise ConfigError(
+            "routing.failover.max_switches_per_test must not be negative"
+        )
 
     role_prefs = config.routing.role_preferences
     for role, providers in (
@@ -268,4 +293,6 @@ def validate_effective_config(config: EffectiveConfig) -> None:
                     f"{', '.join(sorted(BUILTIN_AGENT_PLUGINS))}"
                 )
 
-    logger.log(1, "validated effective config for project %s", config.project_id)
+    logger.log(
+        1, "validated effective config for project %s", config.project_id
+    )

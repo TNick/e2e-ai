@@ -54,7 +54,9 @@ class TestVerifyGate:
         assert cli_mod._gate_reports([report], allow_skips=False) is False
 
     def test_skips_fail_by_default_but_allowed_with_flag(self, tmp_path):
-        report = _report(tmp_path, "r.json", expected=4, unexpected=0, skipped=2)
+        report = _report(
+            tmp_path, "r.json", expected=4, unexpected=0, skipped=2
+        )
         assert cli_mod._gate_reports([report], allow_skips=False) is False
         assert cli_mod._gate_reports([report], allow_skips=True) is True
 
@@ -98,7 +100,9 @@ def _config(tmp_path: Path):
 
 
 class TestCleanup:
-    def test_dry_run_counts_manifests_without_dropping(self, tmp_path, monkeypatch):
+    def test_dry_run_counts_manifests_without_dropping(
+        self, tmp_path, monkeypatch
+    ):
         config = _config(tmp_path)
         # Two kept-db manifests under the state dir.
         for i, db in enumerate(("demo_a", "demo_b")):

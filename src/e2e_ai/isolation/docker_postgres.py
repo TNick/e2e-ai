@@ -170,7 +170,8 @@ def _run_psql(
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         raise DockerError(
-            f"psql failed (exit {result.returncode}) for {sql[:120]!r}: {detail}"
+            f"psql failed (exit {result.returncode}) for "
+            f"{sql[:120]!r}: {detail}"
         )
     return result.stdout.strip()
 
@@ -324,7 +325,9 @@ def _build_database_env(
 ) -> dict[str, str]:
     env = {"E2E_AI_DATABASE": database_name}
     for key, value in context.config.isolation.postgres.env_template.items():
-        env[str(key)] = str(value).format(database=database_name, db=database_name)
+        env[str(key)] = str(value).format(
+            database=database_name, db=database_name
+        )
     return env
 
 

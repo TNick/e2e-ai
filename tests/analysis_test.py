@@ -15,7 +15,10 @@ from e2e_ai.analysis.context import (
 )
 from e2e_ai.analysis.failure_packet import FailurePacket, build_failure_packet
 from e2e_ai.analysis.instrumentation import should_instrument
-from e2e_ai.analysis.signatures import build_failure_signature, detect_generic_family
+from e2e_ai.analysis.signatures import (
+    build_failure_signature,
+    detect_generic_family,
+)
 from e2e_ai.analysis.store import insert_failure_packet
 from e2e_ai.analysis.text import strip_ansi
 from e2e_ai.db.migrations import ensure_database
@@ -45,7 +48,11 @@ def _report(with_attachments: bool = True) -> dict:
                 "contentType": "image/png",
                 "path": "test-failed-1.png",
             },
-            {"name": "trace", "contentType": "application/zip", "path": "trace.zip"},
+            {
+                "name": "trace",
+                "contentType": "application/zip",
+                "path": "trace.zip",
+            },
         ]
     return {"suites": [{"specs": [{"tests": [{"results": [result]}]}]}]}
 
@@ -101,13 +108,17 @@ class TestSignatures:
         # Same error, different volatile timestamp/port and different attempt.
         base2 = dict(base)
         base2["attempt_id"] = "b"
-        base2["error_message"] = "Error: boom at 2024-06-30T22:00:00Z port :12345"
+        base2["error_message"] = (
+            "Error: boom at 2024-06-30T22:00:00Z port :12345"
+        )
         p2 = FailurePacket(**base2)
         assert build_failure_signature(p1) == build_failure_signature(p2)
 
     def test_detects_assertion_family(self):
         assert (
-            detect_generic_family("a.spec.ts", "expect(received).toBe(expected)", "")
+            detect_generic_family(
+                "a.spec.ts", "expect(received).toBe(expected)", ""
+            )
             == "assertion"
         )
 
@@ -157,8 +168,8 @@ def _seed_db(tmp_path: Path) -> sqlite3.Connection:
     conn = ensure_database(tmp_path / "state.sqlite3")
     now = datetime.now(tz=UTC).isoformat()
     conn.execute(
-        "INSERT INTO projects (id, root_path, config_hash, created_at, updated_at)"
-        " VALUES ('p','/r','h',?,?)",
+        "INSERT INTO projects (id, root_path, config_hash, created_at,"
+        " updated_at) VALUES ('p','/r','h',?,?)",
         (now, now),
     )
     conn.execute(
@@ -174,7 +185,8 @@ def _seed_db(tmp_path: Path) -> sqlite3.Connection:
     )
     conn.execute(
         "INSERT INTO attempts (id, run_id, test_id, attempt_index, status,"
-        " work_dir, started_at) VALUES ('att1','run1','demo_x',0,'failed','w',?)",
+        " work_dir, started_at) VALUES ('att1','run1','demo_x',0,'failed',"
+        "'w',?)",
         (now,),
     )
     conn.commit()
@@ -229,8 +241,12 @@ class TestContext:
     def test_previous_failed_plans_are_loaded_in_order(self, tmp_path):
         conn = _seed_db(tmp_path)
         insert_failure_packet(conn, _packet("fp_1"))
-        _insert_plan(conn, "plan1", "fp_1", "first plan", "2024-01-01T00:00:00Z")
-        _insert_plan(conn, "plan2", "fp_1", "second plan", "2024-01-02T00:00:00Z")
+        _insert_plan(
+            conn, "plan1", "fp_1", "first plan", "2024-01-01T00:00:00Z"
+        )
+        _insert_plan(
+            conn, "plan2", "fp_1", "second plan", "2024-01-02T00:00:00Z"
+        )
         plans = load_previous_plans(conn, "demo_x")
         assert plans == ["first plan", "second plan"]
         conn.close()
@@ -242,7 +258,9 @@ class TestInstrumentation:
         # First failure: no prior plan -> do not instrument yet.
         assert should_instrument(conn, "demo_x", "sig") is False
         insert_failure_packet(conn, _packet("fp_1"))
-        _insert_plan(conn, "plan1", "fp_1", "first plan", "2024-01-01T00:00:00Z")
+        _insert_plan(
+            conn, "plan1", "fp_1", "first plan", "2024-01-01T00:00:00Z"
+        )
         # After a fix was attempted, the next failure should request it.
         assert should_instrument(conn, "demo_x", "sig") is True
         conn.close()

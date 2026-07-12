@@ -6,7 +6,8 @@ import re
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _TIMESTAMP_RE = re.compile(
-    r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b"
+    r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?\b"
 )
 # Volatile ephemeral ports (>= 1024) that appear right after a host/colon.
 _PORT_RE = re.compile(r"(?<=:)\d{4,5}\b")
@@ -49,7 +50,9 @@ def normalize_error_text(text: str | None) -> str:
     result = _PORT_RE.sub("<port>", result)
     result = _HEX_ID_RE.sub("<hex>", result)
     # Collapse runs of spaces/tabs but keep line structure.
-    collapsed = (re.sub(r"[ \t]+", " ", line).rstrip() for line in result.splitlines())
+    collapsed = (
+        re.sub(r"[ \t]+", " ", line).rstrip() for line in result.splitlines()
+    )
     return "\n".join(collapsed).strip()
 
 

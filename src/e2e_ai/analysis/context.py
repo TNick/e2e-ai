@@ -158,7 +158,8 @@ def _enrich_flake_evidence(
         (packet.test_id,),
     ).fetchone()[0]
     fails = conn.execute(
-        "SELECT COUNT(*) FROM attempts WHERE test_id = ? AND status != 'passed'",
+        "SELECT COUNT(*) FROM attempts WHERE test_id = ? "
+        "AND status != 'passed'",
         (packet.test_id,),
     ).fetchone()[0]
     repeat = conn.execute(
@@ -197,7 +198,9 @@ def build_repair_context(
     enriched = _enrich_flake_evidence(conn, packet)
     previous_failures = tuple(
         p
-        for p in load_previous_failures(conn, packet.test_id, PREVIOUS_FAILURE_LIMIT)
+        for p in load_previous_failures(
+            conn, packet.test_id, PREVIOUS_FAILURE_LIMIT
+        )
         if p.attempt_id != packet.attempt_id
     )
     previous_plans = tuple(
@@ -256,22 +259,29 @@ def trim_repair_context(
 
     # 1. Drop raw JSON payloads (attachment paths remain on the packet).
     packet = evolve(context.packet, payload={})
-    previous_failures = tuple(evolve(p, payload={}) for p in context.previous_failures)
-    context = evolve(context, packet=packet, previous_failures=previous_failures)
+    previous_failures = tuple(
+        evolve(p, payload={}) for p in context.previous_failures
+    )
+    context = evolve(
+        context, packet=packet, previous_failures=previous_failures
+    )
     omitted.append("raw JSON payloads omitted to fit context budget")
     if _context_size(context) <= max_chars:
         return evolve(context, omitted=tuple(omitted))
 
     # 2. Drop previous failure packets beyond the most recent one.
     if len(context.previous_failures) > 1:
-        context = evolve(context, previous_failures=context.previous_failures[:1])
+        context = evolve(
+            context, previous_failures=context.previous_failures[:1]
+        )
         omitted.append("older previous-failure packets omitted")
         if _context_size(context) <= max_chars:
             return evolve(context, omitted=tuple(omitted))
 
     # 3. Summarize prior plans to their first line.
     summaries = tuple(
-        (plan.strip().splitlines() or [""])[0][:200] for plan in context.previous_plans
+        (plan.strip().splitlines() or [""])[0][:200]
+        for plan in context.previous_plans
     )
     context = evolve(context, previous_plans=summaries)
     omitted.append("previous plans reduced to one-line summaries")

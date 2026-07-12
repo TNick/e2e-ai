@@ -30,7 +30,9 @@ _LINE_COL_RE = re.compile(r"^(?P<file>.+?):\d+(?::\d+)?(?:\s*[›>]\s*|$)")
 
 
 def _short_project_id(project_id: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9-]+", "-", project_id.strip()).strip("-").lower()
+    cleaned = (
+        re.sub(r"[^a-zA-Z0-9-]+", "-", project_id.strip()).strip("-").lower()
+    )
     if not cleaned:
         cleaned = "project"
     return cleaned[:24]
@@ -106,7 +108,9 @@ def _walk_json_suites(
             continue
         spec_title = str(spec.get("title", "")).strip()
         full_title = " › ".join([*titles, spec_title]) if titles else spec_title
-        spec_file = str(spec.get("file") or node.get("file") or "").replace("\\", "/")
+        spec_file = str(spec.get("file") or node.get("file") or "").replace(
+            "\\", "/"
+        )
         line = spec.get("line")
         line_number = int(line) if isinstance(line, int) else None
         project_entries = spec.get("tests") or [{}]
@@ -127,7 +131,9 @@ def _walk_json_suites(
                 project_name,
                 explicit_test_id=explicit_id,
             )
-            raw_list_line = _format_list_line(spec_file, full_title, project_name)
+            raw_list_line = _format_list_line(
+                spec_file, full_title, project_name
+            )
             discovered = DiscoveredTest(
                 id=test_id,
                 title=full_title,
@@ -223,7 +229,9 @@ def _parse_text_inventory(output: str, project_id: str) -> TestInventory:
         spec_file = _normalize_text_file_path(match.group("file") or "")
         title = (match.group("title") or "").strip()
         if not spec_file:
-            warnings.append(f"line {line_number}: missing spec file in {raw_line!r}")
+            warnings.append(
+                f"line {line_number}: missing spec file in {raw_line!r}"
+            )
             continue
         test_id = build_test_id(project_id, spec_file, title, project_name)
         discovered = DiscoveredTest(
@@ -262,7 +270,9 @@ def run_playwright_list(config: EffectiveConfig) -> str:
         raise CatalogError("playwright.list_command is not configured")
 
     cmd = list(list_command.argv)
-    if not any(arg.startswith("--reporter=") or arg == "--reporter" for arg in cmd):
+    if not any(
+        arg.startswith("--reporter=") or arg == "--reporter" for arg in cmd
+    ):
         cmd.extend(_JSON_REPORTER_ARGS)
 
     test_dir = config.project_root / config.playwright.cwd

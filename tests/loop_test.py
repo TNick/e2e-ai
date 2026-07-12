@@ -169,10 +169,14 @@ class _LegacyBound:
     def id(self) -> str:
         return self._plugin.id
 
-    def run(self, prompt, *, workdir, timeout, log_dir=None, env=None, mcp=None):
+    def run(
+        self, prompt, *, workdir, timeout, log_dir=None, env=None, mcp=None
+    ):
         _ = workdir, timeout, log_dir, env, mcp
         if "instrumentation agent" in prompt:
-            result = self._plugin.instrument(type("R", (), {"prompt": prompt})())
+            result = self._plugin.instrument(
+                type("R", (), {"prompt": prompt})()
+            )
         elif "implementer agent" in prompt:
             result = self._plugin.implement(type("R", (), {"prompt": prompt})())
         else:
@@ -191,7 +195,9 @@ class _FakeRegistry:
         self._plugins = {
             "claude": _FakeAgent("claude"),
             "codex": _FakeAgent("codex"),
-            "claude-strong": _FakeAgent("claude-strong", "add logging then fix"),
+            "claude-strong": _FakeAgent(
+                "claude-strong", "add logging then fix"
+            ),
         }
         self.agents = {
             "planner": _LegacyBound(self._plugins["claude"]),
@@ -254,7 +260,8 @@ def test_escalates_to_instrumenter_on_repeat_failure(tmp_path, monkeypatch):
     # 3 attempts (default): initial + after implement + after instrument.
     assert report.attempts == 3
     assert any(
-        "instrumentation agent" in call for call in registry._plugins["claude"].calls
+        "instrumentation agent" in call
+        for call in registry._plugins["claude"].calls
     )
     conn.close()
 
@@ -270,7 +277,9 @@ def test_environmental_failure_is_blocked(tmp_path, monkeypatch):
         [
             (
                 False,
-                FailureInfo(error_message="Error: connect ECONNREFUSED 127.0.0.1:5432"),
+                FailureInfo(
+                    error_message="Error: connect ECONNREFUSED 127.0.0.1:5432"
+                ),
             )
         ],
     )
@@ -287,7 +296,9 @@ def test_planner_can_declare_blocked(tmp_path, monkeypatch, blocked_plan):
     config = _config(tmp_path)
     conn = _seeded_conn(config)
     registry = _FakeRegistry()
-    registry.agents["planner"] = _LegacyBound(_FakeAgent("claude", blocked_plan))
+    registry.agents["planner"] = _LegacyBound(
+        _FakeAgent("claude", blocked_plan)
+    )
     registry._plugins["claude"] = registry.agents["planner"]._plugin
 
     _stub_run_attempt(

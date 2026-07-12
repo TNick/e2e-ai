@@ -1,6 +1,7 @@
 """Local, read-only web monitor for the e2e-ai state database.
 
-`e2e-ai ui` starts a FastAPI server (the optional ``monitor`` extra) that browses
+`e2e-ai ui` starts a FastAPI server (the optional ``monitor`` extra)
+that browses
 runs/tests/attempts/failures/agents from the SQLite state database and launches
 allowlisted e2e-ai commands. Database access is read-only; the UI never mutates
 the state database and never runs a shell.
@@ -8,7 +9,12 @@ the state database and never runs a shell.
 
 from __future__ import annotations
 
-from .commands import COMMANDS, CommandValidationError, build_argv, command_schema
+from .commands import (
+    COMMANDS,
+    CommandValidationError,
+    build_argv,
+    command_schema,
+)
 from .models import MonitorInfo
 from .processes import ProcessManager
 from .server import (

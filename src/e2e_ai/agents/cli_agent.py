@@ -58,7 +58,8 @@ class CLIAgent(LegacyAgentRunner):
                 self.id,
                 logged_in=ok,
                 verified=True,
-                reason=out or ("login check ok" if ok else "login check failed"),
+                reason=out
+                or ("login check ok" if ok else "login check failed"),
             )
 
         # 3. Fall back to a health command: proves the binary runs but cannot
@@ -66,13 +67,18 @@ class CLIAgent(LegacyAgentRunner):
         ok, out = self._run_probe(self.spec.health_args)
         if not ok:
             return LoginStatus(
-                self.id, logged_in=False, verified=True, reason=out or "health failed"
+                self.id,
+                logged_in=False,
+                verified=True,
+                reason=out or "health failed",
             )
         return LoginStatus(
             self.id,
             logged_in=True,
             verified=False,
-            reason="binary responds but login could not be verified without tokens",
+            reason=(
+                "binary responds but login could not be verified without tokens"
+            ),
         )
 
     def _run_probe(self, args: list[str]) -> tuple[bool, str]:
@@ -153,20 +159,31 @@ class CLIAgent(LegacyAgentRunner):
             stdout = proc.stdout.decode("utf-8", errors="replace")
             stderr = proc.stderr.decode("utf-8", errors="replace")
             result = AgentRunResult(
-                self.id, proc.returncode, stdout, stderr, output_path=output_path
+                self.id,
+                proc.returncode,
+                stdout,
+                stderr,
+                output_path=output_path,
             )
         except subprocess.TimeoutExpired as exc:
             stdout = (exc.stdout or b"").decode("utf-8", errors="replace")
             stderr = (exc.stderr or b"").decode("utf-8", errors="replace")
             result = AgentRunResult(
-                self.id, 124, stdout, stderr, output_path=output_path, timed_out=True
+                self.id,
+                124,
+                stdout,
+                stderr,
+                output_path=output_path,
+                timed_out=True,
             )
         finally:
             if tmp_file is not None:
                 tmp_file.unlink(missing_ok=True)
 
         if output_path is not None:
-            header = f"$ {' '.join(command)}\n[transport={self.spec.transport}]\n\n"
+            header = (
+                f"$ {' '.join(command)}\n[transport={self.spec.transport}]\n\n"
+            )
             output_path.write_text(
                 header + result.stdout + "\n--- stderr ---\n" + result.stderr,
                 encoding="utf-8",

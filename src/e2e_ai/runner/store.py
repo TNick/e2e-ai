@@ -60,7 +60,10 @@ def finish_attempt_record(
     """Update the attempt row after Playwright exits."""
 
     conn.execute(
-        "UPDATE attempts SET finished_at = ?, status = ?, exit_code = ? WHERE id = ?",
+        (
+            "UPDATE attempts SET finished_at = ?, status = ?,"
+            " exit_code = ? WHERE id = ?"
+        ),
         (_now(), result.status, result.exit_code, result.attempt_id),
     )
     conn.commit()

@@ -294,7 +294,9 @@ def _run_shard_coverage(
     slot_pass_counts = {slot.id: 0 for slot in slots}
     executed_ids: set[str] = set()
 
-    while any(count < min_tests_per_slot for count in slot_pass_counts.values()):
+    while any(
+        count < min_tests_per_slot for count in slot_pass_counts.values()
+    ):
         needy = {
             slot_id
             for slot_id, count in slot_pass_counts.items()
@@ -332,7 +334,9 @@ def _run_shard_coverage(
             continue
         if state.state == STATE_EXTERNAL_BLOCKER:
             return True, state.note
-        return True, (f"shard coverage requires passing tests; failed: {test.id}")
+        return True, (
+            f"shard coverage requires passing tests; failed: {test.id}"
+        )
 
     return False, None
 
@@ -957,7 +961,9 @@ def run_one_test_until_resolved(
     selector = test_selector(test)
     run_count, failure_count = attempt_history_counts(conn, test.id)
     history_suffix = (
-        format_test_history_suffix(run_count, failure_count) if run_count > 0 else ""
+        format_test_history_suffix(run_count, failure_count)
+        if run_count > 0
+        else ""
     )
     say(f">> {selector}{history_suffix}")
 
@@ -998,7 +1004,11 @@ def run_one_test_until_resolved(
             return repair_state
 
         # Failed run.
-        if has_prior_pass and repair_state.state == STATE_RUNNING and attempt == 0:
+        if (
+            has_prior_pass
+            and repair_state.state == STATE_RUNNING
+            and attempt == 0
+        ):
             _transition(repair_state, EVENT_REGRESS)
         elif repair_state.state == STATE_RERUNNING:
             _transition(repair_state, EVENT_FAIL)
@@ -1009,7 +1019,9 @@ def run_one_test_until_resolved(
 
         if failure.is_environmental():
             repair_state.state = STATE_EXTERNAL_BLOCKER
-            repair_state.note = "failure looks environmental (setup/services), not code"
+            repair_state.note = (
+                "failure looks environmental (setup/services), not code"
+            )
             conn.execute(
                 "UPDATE tests SET last_status = ? WHERE id = ?",
                 (TestStatus.BLOCKED.value, test.id),
@@ -1178,7 +1190,10 @@ def run_repair_loop(
             f"passing test(s) per slot."
         )
     elif only_failed:
-        say(f"Scheduling {len(pending)} test(s) that failed in run {previous_run_id}.")
+        say(
+            f"Scheduling {len(pending)} test(s) that failed in run "
+            f"{previous_run_id}."
+        )
     else:
         say(f"Scheduling {len(pending)} test(s).")
     if _will_start_docker_containers(config, start_runtime=start_runtime):

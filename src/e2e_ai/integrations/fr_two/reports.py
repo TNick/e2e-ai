@@ -30,7 +30,9 @@ FR_TWO_FAMILIES = (
 )
 
 
-def fr_two_failure_family(spec_file: str, error_message: str, stack: str) -> str:
+def fr_two_failure_family(
+    spec_file: str, error_message: str, stack: str
+) -> str:
     """Return the fr-two-specific failure family for a failure."""
 
     hay = f"{spec_file}\n{error_message}\n{stack}".lower()
@@ -52,7 +54,9 @@ def fr_two_failure_family(spec_file: str, error_message: str, stack: str) -> str
         return FAMILY_FRONTEND_BUILD
     if has("401", "403", "unauthorized", "forbidden", "login", "auth"):
         return FAMILY_AUTH
-    if has("500", "internal server error", "traceback", "fastapi", "sqlalchemy"):
+    if has(
+        "500", "internal server error", "traceback", "fastapi", "sqlalchemy"
+    ):
         return FAMILY_BACKEND
     return FAMILY_UNKNOWN
 

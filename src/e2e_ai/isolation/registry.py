@@ -27,7 +27,9 @@ def create_isolation_backend(config: EffectiveConfig) -> IsolationBackend:
     if backend == "fr_two":
         # Imported lazily: the fr_two adapter imports this isolation package,
         # so a module-level import here forms an import cycle.
-        from ..integrations.fr_two.isolation import create_fr_two_isolation_backend
+        from ..integrations.fr_two.isolation import (
+            create_fr_two_isolation_backend,
+        )
 
         return create_fr_two_isolation_backend(config)
     raise ConfigError(

@@ -100,7 +100,9 @@ def register_routes(
     def failure(packet_id: str) -> dict[str, Any]:
         data = _guard(lambda: store.get_failure(packet_id))
         if data is None:
-            raise HTTPException(status_code=404, detail="failure packet not found")
+            raise HTTPException(
+                status_code=404, detail="failure packet not found"
+            )
         return data
 
     @app.get("/api/agents")
@@ -163,7 +165,10 @@ def register_routes(
     def command_run_output(run_id: str) -> dict[str, Any]:
         if processes.get_run(run_id) is None:
             raise HTTPException(status_code=404, detail="command run not found")
-        return {"command_run_id": run_id, "output": processes.read_output(run_id)}
+        return {
+            "command_run_id": run_id,
+            "output": processes.read_output(run_id),
+        }
 
     # ── events (SSE) ─────────────────────────────────────────────────────────
     @app.get("/api/events")

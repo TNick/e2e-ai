@@ -27,8 +27,8 @@ def _now() -> str:
 def _seed_project(conn) -> None:
     now = _now()
     conn.execute(
-        "INSERT INTO projects (id, root_path, config_hash, created_at, updated_at)"
-        " VALUES ('demo', '/r', 'h', ?, ?)",
+        "INSERT INTO projects (id, root_path, config_hash, created_at,"
+        " updated_at) VALUES ('demo', '/r', 'h', ?, ?)",
         (now, now),
     )
 
@@ -56,7 +56,9 @@ class TestStaleRuns:
         )
         try:
             assert SCHEMA_VERSION == 3
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(runs)")
+            }
             assert "pid" in columns
         finally:
             conn.close()
@@ -78,7 +80,8 @@ class TestStaleRuns:
 
         result = reconcile_stale_runs(conn, project_id="demo")
         row = conn.execute(
-            "SELECT status, reason, finished_at FROM runs WHERE id = 'run_orphan'"
+            "SELECT status, reason, finished_at FROM runs"
+            " WHERE id = 'run_orphan'"
         ).fetchone()
         conn.close()
 
@@ -177,7 +180,9 @@ class TestStaleRuns:
         conn.close()
 
         conn = ensure_database(db, project_id="demo")
-        row = conn.execute("SELECT status FROM runs WHERE id = 'run_auto'").fetchone()
+        row = conn.execute(
+            "SELECT status FROM runs WHERE id = 'run_auto'"
+        ).fetchone()
         conn.close()
 
         assert row["status"] == RUN_STATUS_STOPPED
@@ -198,8 +203,8 @@ class TestStaleRuns:
         conn = ensure_database(db, reconcile_stale_runs=False)
         now = _now()
         conn.execute(
-            "INSERT INTO projects (id, root_path, config_hash, created_at, updated_at)"
-            " VALUES ('demo', '/r', 'h', ?, ?)",
+            "INSERT INTO projects (id, root_path, config_hash, created_at,"
+            " updated_at) VALUES ('demo', '/r', 'h', ?, ?)",
             (now, now),
         )
         conn.commit()
@@ -220,7 +225,9 @@ class TestStaleRuns:
             playwright_mcp=PlaywrightMcpConfig(),
         )
         run_id = create_repair_run(conn, config)
-        row = conn.execute("SELECT pid FROM runs WHERE id = ?", (run_id,)).fetchone()
+        row = conn.execute(
+            "SELECT pid FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
         conn.close()
         assert int(row["pid"]) == os.getpid()
 
@@ -229,14 +236,16 @@ class TestStaleRuns:
         conn = ensure_database(db, reconcile_stale_runs=False)
         now = _now()
         conn.execute(
-            "INSERT INTO projects (id, root_path, config_hash, created_at, updated_at)"
-            " VALUES ('demo', '/r', 'h', ?, ?)",
+            "INSERT INTO projects (id, root_path, config_hash, created_at,"
+            " updated_at) VALUES ('demo', '/r', 'h', ?, ?)",
             (now, now),
         )
         conn.commit()
         store = RepairStore(conn)
         run_id = store.start_run("demo")
-        row = conn.execute("SELECT pid FROM runs WHERE id = ?", (run_id,)).fetchone()
+        row = conn.execute(
+            "SELECT pid FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
         conn.close()
         assert int(row["pid"]) == os.getpid()
 
@@ -283,6 +292,8 @@ class TestCleanupStaleRunsCli:
         assert "run_cli" in result.output
 
         conn = ensure_database(db, reconcile_stale_runs=False)
-        row = conn.execute("SELECT status FROM runs WHERE id = 'run_cli'").fetchone()
+        row = conn.execute(
+            "SELECT status FROM runs WHERE id = 'run_cli'"
+        ).fetchone()
         conn.close()
         assert row["status"] == RUN_STATUS_STOPPED

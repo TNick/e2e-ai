@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 
 def _default_project_name(project_id: str) -> str:
-    safe = "".join(ch if ch.isalnum() else "_" for ch in project_id.lower()).strip("_")
+    safe = "".join(
+        ch if ch.isalnum() else "_" for ch in project_id.lower()
+    ).strip("_")
     return f"e2e_ai_{safe or 'project'}"
 
 
@@ -66,11 +68,17 @@ def build_runtime_compose_argv(
     argv: list[str] = ["docker", "compose", "-p", project_name]
     for env_file in cfg.env_files:
         argv.extend(
-            ["--env-file", str(resolve_runtime_path(project_root, env_file, base=cwd))]
+            [
+                "--env-file",
+                str(resolve_runtime_path(project_root, env_file, base=cwd)),
+            ]
         )
     for compose_file in cfg.compose_files:
         argv.extend(
-            ["-f", str(resolve_runtime_path(project_root, compose_file, base=cwd))]
+            [
+                "-f",
+                str(resolve_runtime_path(project_root, compose_file, base=cwd)),
+            ]
         )
     for profile in cfg.profiles:
         argv.extend(["--profile", profile])
@@ -149,7 +157,9 @@ class DockerComposeRuntime:
         if cfg.start.remove_orphans:
             argv.append("--remove-orphans")
         if cfg.start.wait:
-            argv.extend(["--wait", "--wait-timeout", str(cfg.start.timeout_seconds)])
+            argv.extend(
+                ["--wait", "--wait-timeout", str(cfg.start.timeout_seconds)]
+            )
         argv.extend(cfg.services)
 
         write_command_manifest(work_dir, argv, label="compose-up")
@@ -253,7 +263,9 @@ class DockerComposeRuntime:
             write_compose_ps_output(state.work_dir, result.stdout)
 
 
-def create_docker_compose_runtime(config: EffectiveConfig) -> DockerComposeRuntime:
+def create_docker_compose_runtime(
+    config: EffectiveConfig,
+) -> DockerComposeRuntime:
     """Create a Docker Compose runtime from effective config."""
 
     compose = config.target_runtime.docker_compose

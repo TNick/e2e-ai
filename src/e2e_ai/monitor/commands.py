@@ -18,7 +18,15 @@ from .store import MonitorError
 
 # Field types exposed to the UI form renderer.
 FIELD_TYPES = frozenset(
-    {"text", "integer", "boolean", "toggle", "choice", "path", "repeatable_path"}
+    {
+        "text",
+        "integer",
+        "boolean",
+        "toggle",
+        "choice",
+        "path",
+        "repeatable_path",
+    }
 )
 
 
@@ -131,10 +139,17 @@ COMMANDS: dict[str, CommandDef] = {
         options=(
             _project_root_option(),
             CommandOption(
-                "test_id", "text", "--test-id", help="Run only the test with this id."
+                "test_id",
+                "text",
+                "--test-id",
+                help="Run only the test with this id.",
             ),
             CommandOption(
-                "all", "boolean", "--all", default=False, help="Run all runnable tests."
+                "all",
+                "boolean",
+                "--all",
+                default=False,
+                help="Run all runnable tests.",
             ),
             CommandOption(
                 "fail_fast",
@@ -144,7 +159,10 @@ COMMANDS: dict[str, CommandDef] = {
                 help="Stop at the first failing test.",
             ),
             CommandOption(
-                "limit", "integer", "--limit", help="Only run the first N tests."
+                "limit",
+                "integer",
+                "--limit",
+                help="Only run the first N tests.",
             ),
             _rediscover_toggle("Refresh the inventory before running."),
             _start_runtime_toggle(),
@@ -166,7 +184,10 @@ COMMANDS: dict[str, CommandDef] = {
         options=(
             _project_root_option(),
             CommandOption(
-                "limit", "integer", "--limit", help="Only repair the first N tests."
+                "limit",
+                "integer",
+                "--limit",
+                help="Only repair the first N tests.",
             ),
             CommandOption(
                 "test_id", "text", "--test-id", help="Repair only this test id."
@@ -197,7 +218,10 @@ COMMANDS: dict[str, CommandDef] = {
                 "boolean",
                 "--failed-only",
                 default=False,
-                help="Repair only tests that failed in the previous finished run.",
+                help=(
+                    "Repair only tests that failed in the previous "
+                    "finished run."
+                ),
             ),
             _start_runtime_toggle(),
         ),
@@ -223,7 +247,9 @@ COMMANDS: dict[str, CommandDef] = {
                 default=False,
                 help="Do not fail the gate on skipped tests.",
             ),
-            _rediscover_toggle("Refresh the inventory before running (run mode)."),
+            _rediscover_toggle(
+                "Refresh the inventory before running (run mode)."
+            ),
             CommandOption(
                 "limit",
                 "integer",
@@ -313,7 +339,9 @@ def _coerce_int(name: str, value: Any) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
-        raise CommandValidationError(f"option {name!r} must be an integer") from None
+        raise CommandValidationError(
+            f"option {name!r} must be an integer"
+        ) from None
 
 
 def build_argv(
@@ -335,7 +363,8 @@ def build_argv(
     unknown = set(values) - known
     if unknown:
         raise CommandValidationError(
-            f"unknown option(s) for {command_id!r}: {', '.join(sorted(unknown))}"
+            f"unknown option(s) for {command_id!r}: "
+            f"{', '.join(sorted(unknown))}"
         )
 
     python = python_executable or sys.executable
@@ -366,7 +395,8 @@ def build_argv(
                 continue
             if opt.choices and str(value) not in opt.choices:
                 raise CommandValidationError(
-                    f"option {opt.name!r} must be one of {', '.join(opt.choices)}"
+                    f"option {opt.name!r} must be one of "
+                    f"{', '.join(opt.choices)}"
                 )
             argv += [opt.flag, str(value)]
         else:  # text, path

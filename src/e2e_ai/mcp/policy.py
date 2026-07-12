@@ -93,7 +93,8 @@ def validate_playwright_mcp_policy(
     version = (config.version or "").strip().lower()
     if not version or version == "latest":
         raise ConfigError(
-            "playwright_mcp.version must be a pinned version, not empty or 'latest'"
+            "playwright_mcp.version must be a pinned version, "
+            "not empty or 'latest'"
         )
     if config.unrestricted_file_access:
         raise ConfigError(
@@ -104,7 +105,8 @@ def validate_playwright_mcp_policy(
     for unsafe in DEFAULT_MCP_TOOLS_DENY:
         if unsafe in allow:
             raise ConfigError(
-                f"playwright_mcp.tools.allow must not include unsafe tool {unsafe!r}"
+                "playwright_mcp.tools.allow must not include "
+                f"unsafe tool {unsafe!r}"
             )
     if state_dir is not None:
         probe = state_dir / "work" / ".mcp-probe"
@@ -112,7 +114,8 @@ def validate_playwright_mcp_policy(
             probe.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise ConfigError(
-                f"playwright_mcp enabled but state work dir is not writable: {exc}"
+                "playwright_mcp enabled but state work dir is not "
+                f"writable: {exc}"
             ) from exc
     if require_origins and config.origins.from_environment_lease:
         logger.log(

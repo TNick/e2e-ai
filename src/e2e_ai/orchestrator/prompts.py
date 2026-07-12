@@ -68,8 +68,9 @@ def _stopping_conditions() -> str:
     return textwrap.dedent(
         """
         Accepted stopping conditions (declare explicitly if applicable):
-        - BLOCKED: services or environment are unavailable and local code cannot
-          fix the failure (missing Docker, browsers, registry credentials, etc.).
+        - BLOCKED: services or environment are unavailable and local code
+          cannot fix the failure (missing Docker, browsers, registry
+          credentials, etc.).
         - BLOCKED_REFERENCE_BACKEND: the fix requires backend code changes but
           target.scope keeps backend read-only (reference only).
         - Do NOT stop for assertion failures, locator timeouts, or backend 500s
@@ -96,11 +97,14 @@ def _target_scope_block(config: EffectiveConfig) -> str:
             "Only edit frontend surfaces. Do not modify backend or server code."
         )
     elif target.scope == "full_stack":
-        lines.append("You may edit both frontend and backend surfaces listed above.")
+        lines.append(
+            "You may edit both frontend and backend surfaces listed above."
+        )
     elif target.scope == "frontend_with_backend_reference":
         lines.extend(
             [
-                "Backend is read-only reference for diagnosis and API contracts.",
+                "Backend is read-only reference for diagnosis and "
+                "API contracts.",
                 "Do NOT edit backend files.",
                 "If the root cause requires backend changes, stop with:",
                 "BLOCKED_REFERENCE_BACKEND: <short reason>",
@@ -125,7 +129,9 @@ def build_planner_prompt(
     project = test.project_name if test is not None else None
 
     summary = packet.stdout_tail.strip().splitlines()
-    pw_summary = "\n".join(summary[-40:]) if summary else "(no Playwright log tail)"
+    pw_summary = (
+        "\n".join(summary[-40:]) if summary else "(no Playwright log tail)"
+    )
 
     artifacts: list[str] = []
     artifacts.extend(packet.screenshot_paths)
@@ -145,7 +151,9 @@ def build_planner_prompt(
 
     omitted = ""
     if context.omitted:
-        omitted = "Omitted from context (size budget): " + ", ".join(context.omitted)
+        omitted = "Omitted from context (size budget): " + ", ".join(
+            context.omitted
+        )
 
     return (
         textwrap.dedent(
@@ -226,15 +234,16 @@ def build_implementer_prompt(
     for line in compact_plan.splitlines():
         if ".ts" in line or ".py" in line or ".js" in line:
             files_hint = (
-                "Files mentioned in the plan (inspect and change only as needed):\n"
-                + compact_plan
+                "Files mentioned in the plan (inspect and change only "
+                "as needed):\n" + compact_plan
             )
             break
 
     return (
         textwrap.dedent(
             """
-        You are the implementer agent in an automated Playwright e2e repair loop.
+        You are the implementer agent in an automated Playwright e2e
+        repair loop.
         Apply the PLAN below by editing project files. Keep edits focused and
         minimal. Do not redesign the approach.
 
@@ -290,7 +299,8 @@ def build_instrumentation_prompt(
             """
         You are the instrumentation agent in an automated Playwright e2e repair
         loop. This test failed again after a previous plan was implemented.
-        Add temporary, reversible diagnostics — do NOT apply a behavioral fix yet.
+        Add temporary, reversible diagnostics — do NOT apply a
+        behavioral fix yet.
 
         Project root: %s
         Test: %s › %s
@@ -304,7 +314,8 @@ def build_instrumentation_prompt(
 
         %s
 
-        Output: describe instrumentation steps and what to observe on the next run.
+        Output: describe instrumentation steps and what to observe on
+        the next run.
         Tag temporary edits with the marker from the request JSON.
         """
         )

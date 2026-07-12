@@ -16,7 +16,10 @@ from e2e_ai.config.models import (
 from e2e_ai.db.migrations import ensure_database
 from e2e_ai.inventory.models import DiscoveredTest
 from e2e_ai.inventory.models import TestInventory as InventorySnapshot
-from e2e_ai.inventory.playwright_list import build_test_id, parse_playwright_list
+from e2e_ai.inventory.playwright_list import (
+    build_test_id,
+    parse_playwright_list,
+)
 from e2e_ai.inventory.store import (
     apply_excludes,
     list_runnable_tests,
@@ -96,7 +99,9 @@ def _effective_config(
             list_command=CommandSpec(
                 argv=("pnpm", "exec", "playwright", "test", "--list")
             ),
-            run_command=CommandSpec(argv=("pnpm", "exec", "playwright", "test")),
+            run_command=CommandSpec(
+                argv=("pnpm", "exec", "playwright", "test")
+            ),
         ),
         agents=(),
         isolation=IsolationConfig(),
@@ -129,7 +134,9 @@ class TestInventoryParser:
         )
         assert chromium_login.spec_file == "login.spec.ts"
         assert chromium_login.line == 10
-        assert chromium_login.raw_list_line == ("[chromium] › login.spec.ts › logs in")
+        assert chromium_login.raw_list_line == (
+            "[chromium] › login.spec.ts › logs in"
+        )
 
     def test_parses_text_list_output(self) -> None:
         inventory = parse_playwright_list(SAMPLE_TEXT, "demo-proj")
@@ -164,7 +171,9 @@ class TestInventoryParser:
             json.dumps(SAMPLE_JSON),
             "demo-proj",
         )
-        login_tests = [test for test in inventory.tests if test.title == "logs in"]
+        login_tests = [
+            test for test in inventory.tests if test.title == "logs in"
+        ]
         assert len({test.id for test in login_tests}) == 2
 
 
@@ -174,7 +183,9 @@ class TestInventoryStore:
     def test_refresh_inventory_upserts_tests(self, tmp_path: Path) -> None:
         config = _effective_config(tmp_path)
         conn = ensure_database(tmp_path / "state.sqlite3")
-        inventory = parse_playwright_list(json.dumps(SAMPLE_JSON), config.project_id)
+        inventory = parse_playwright_list(
+            json.dumps(SAMPLE_JSON), config.project_id
+        )
         refresh_inventory(conn, config, inventory)
         conn.commit()
 
@@ -219,9 +230,13 @@ class TestInventoryStore:
 
     def test_exclude_patterns_mark_tests_excluded(self, tmp_path: Path) -> None:
         config = _effective_config(tmp_path, exclude=(r"flaky\.spec\.ts",))
-        inventory = parse_playwright_list(json.dumps(SAMPLE_JSON), config.project_id)
+        inventory = parse_playwright_list(
+            json.dumps(SAMPLE_JSON), config.project_id
+        )
         reasons = apply_excludes(inventory.tests, config.exclude)
-        flaky = next(test for test in inventory.tests if "flaky" in test.spec_file)
+        flaky = next(
+            test for test in inventory.tests if "flaky" in test.spec_file
+        )
         assert reasons[flaky.id] is not None
         assert all(
             reasons[test.id] is None
@@ -242,7 +257,9 @@ class TestInventoryStore:
         assert excluded == 1
         conn.close()
 
-    def test_exclude_matches_tests_prefixed_spec_paths(self, tmp_path: Path) -> None:
+    def test_exclude_matches_tests_prefixed_spec_paths(
+        self, tmp_path: Path
+    ) -> None:
         config = _effective_config(
             tmp_path,
             exclude=(r"tests/_diag-.*\.spec\.ts",),

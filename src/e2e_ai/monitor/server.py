@@ -16,7 +16,9 @@ from .store import MonitorError, MonitorStore
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-MISSING_EXTRA_MESSAGE = 'Install the monitor extra: pip install "e2e-ai[monitor]"'
+MISSING_EXTRA_MESSAGE = (
+    'Install the monitor extra: pip install "e2e-ai[monitor]"'
+)
 
 
 def monitor_extra_available() -> bool:
@@ -51,17 +53,25 @@ def create_app(
 
     app = FastAPI(title="e2e-ai monitor", docs_url=None, redoc_url=None)
     register_routes(
-        app, store=store, processes=processes, info=info, config_full=config_full
+        app,
+        store=store,
+        processes=processes,
+        info=info,
+        config_full=config_full,
     )
 
     if STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
+        app.mount(
+            "/", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui"
+        )
     else:  # pragma: no cover - only when assets were not shipped
 
         @app.get("/")
         def _no_ui() -> dict[str, str]:
             return {
-                "message": "Monitor API is running; static UI assets are not built.",
+                "message": (
+                    "Monitor API is running; static UI assets are not built."
+                ),
                 "api": "/api/health",
             }
 
@@ -103,7 +113,9 @@ def build_monitor(
     return app, store, processes, info
 
 
-def run_server(app, *, host: str, port: int) -> None:  # pragma: no cover - network
+def run_server(
+    app, *, host: str, port: int
+) -> None:  # pragma: no cover - network
     """Run the app with uvicorn (blocking)."""
 
     import uvicorn

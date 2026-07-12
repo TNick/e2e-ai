@@ -83,8 +83,8 @@ def build_instrumentation_request(packet: FailurePacket) -> dict[str, object]:
         "cleanup_required": True,
         "permanent_observability_requested": False,
         "guidance": (
-            f"Tag every temporary source change with a `{TEMP_MARKER}` comment. "
-            "Do not log secrets, tokens, cookies, or private data. Do not skip "
-            "the test or weaken assertions."
+            f"Tag every temporary source change with a `{TEMP_MARKER}` "
+            "comment. Do not log secrets, tokens, cookies, or private data. "
+            "Do not skip the test or weaken assertions."
         ),
     }

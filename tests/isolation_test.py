@@ -27,7 +27,9 @@ from e2e_ai.isolation import (
 from e2e_ai.isolation.models import IsolationContext
 
 
-def _effective_config(tmp_path: Path, *, backend: str = "none") -> EffectiveConfig:
+def _effective_config(
+    tmp_path: Path, *, backend: str = "none"
+) -> EffectiveConfig:
     playwright = PlaywrightConfig(
         list_command=CommandSpec(argv=("echo", "list")),
         run_command=CommandSpec(argv=("echo", "run")),
@@ -74,7 +76,9 @@ class TestPorts:
             "e2e_ai.isolation.ports.port_is_free",
             fake_port_is_free,
         )
-        base = find_free_port_range(host="127.0.0.1", base=8101, count=2, step=10)
+        base = find_free_port_range(
+            host="127.0.0.1", base=8101, count=2, step=10
+        )
         assert base != 8101
         assert fake_port_is_free("127.0.0.1", base)
         assert fake_port_is_free("127.0.0.1", base + 1)
@@ -110,7 +114,9 @@ class TestNoIsolation:
 class TestCompose:
     """Docker Compose argv builders."""
 
-    def test_build_compose_argv_uses_list_arguments(self, tmp_path: Path) -> None:
+    def test_build_compose_argv_uses_list_arguments(
+        self, tmp_path: Path
+    ) -> None:
         compose_a = tmp_path / "compose.a.yml"
         compose_b = tmp_path / "compose.b.yml"
         compose_a.write_text("services: {}\n", encoding="utf-8")

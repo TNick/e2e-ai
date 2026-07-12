@@ -79,7 +79,8 @@ def _compose_project_name(context: IsolationContext) -> str:
         return pg.compose_project_name
     safe = (
         "".join(
-            ch if ch.isalnum() else "_" for ch in context.config.project_id.lower()
+            ch if ch.isalnum() else "_"
+            for ch in context.config.project_id.lower()
         ).strip("_")
         or "project"
     )
@@ -142,4 +143,6 @@ def run_one_shot_services(context: IsolationContext) -> None:
             log_path=log_dir / f"compose-run-{service}.log",
         )
         if code != 0:
-            raise DockerError(f"docker compose run --rm {service} failed (exit {code})")
+            raise DockerError(
+                f"docker compose run --rm {service} failed (exit {code})"
+            )

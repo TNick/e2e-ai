@@ -99,7 +99,8 @@ class ProcessManager:
     def launch(self, command: CommandDef, argv: list[str]) -> str:
         if not command.concurrent and self.has_running():
             raise MonitorError(
-                f"command {command.id!r} cannot run while another command is active"
+                f"command {command.id!r} cannot run while another "
+                "command is active"
             )
 
         run_id = _new_run_id()
@@ -146,7 +147,9 @@ class ProcessManager:
                 },
             )
             self._bump()
-            raise MonitorError(f"failed to start {command.id!r}: {exc}") from exc
+            raise MonitorError(
+                f"failed to start {command.id!r}: {exc}"
+            ) from exc
 
         with self._lock:
             self._procs[run_id] = proc

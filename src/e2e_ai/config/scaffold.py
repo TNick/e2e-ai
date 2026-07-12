@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from attrs import define, field
 
-from .detect import TargetDetectionResult, safe_fallback_target, target_from_detection
+from .detect import (
+    TargetDetectionResult,
+    safe_fallback_target,
+    target_from_detection,
+)
 from .models import TargetConfig, TargetSurfaceConfig
 
 

@@ -89,10 +89,13 @@ def ensure_database(
                 _apply_migrations(conn, version)
             else:
                 raise RuntimeError(
-                    f"unsupported schema version {version}; expected {SCHEMA_VERSION}"
+                    f"unsupported schema version {version}; "
+                    f"expected {SCHEMA_VERSION}"
                 )
     if reconcile_stale_runs:
-        from ..repair.stale_runs import reconcile_stale_runs as _reconcile_stale_runs
+        from ..repair.stale_runs import (
+            reconcile_stale_runs as _reconcile_stale_runs,
+        )
 
         _reconcile_stale_runs(conn, project_id=project_id)
     return conn

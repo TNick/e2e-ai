@@ -89,7 +89,9 @@ class AgentSpec:
             "prompt_args": list(override.get("prompt_args", self.prompt_args)),
             "transport": override.get("transport", self.transport),
             "health_args": list(override.get("health_args", self.health_args)),
-            "login_check_args": override.get("login_check_args", self.login_check_args),
+            "login_check_args": override.get(
+                "login_check_args", self.login_check_args
+            ),
             "auth_files": list(override.get("auth_files", self.auth_files)),
             "env": {**self.env, **override.get("env", {})},
             "enabled": bool(override.get("enabled", self.enabled)),

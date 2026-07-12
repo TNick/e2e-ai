@@ -98,7 +98,10 @@ def implementation_output_schema() -> dict[str, object]:
         "properties": {
             "summary": {"type": "string"},
             "changed_files": {"type": "array", "items": {"type": "string"}},
-            "verification_performed": {"type": "array", "items": {"type": "string"}},
+            "verification_performed": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
             "remaining_risk": {"type": "string"},
         },
         "additionalProperties": False,

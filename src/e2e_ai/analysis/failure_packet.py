@@ -40,7 +40,8 @@ class FailureClassifier(Protocol):
         stack: str,
         attachments: Sequence[Path],
     ) -> str | None:
-        """Return a project-specific family or ``None`` to keep the generic one."""
+        """Return a project-specific family or ``None`` to keep the generic
+        one."""
 
 
 @define
@@ -105,7 +106,9 @@ def build_failure_packet(
     else:
         info = extract_failure(None, log_text)
 
-    error_message = normalize_error_text(redact_sensitive_text(info.error_message))
+    error_message = normalize_error_text(
+        redact_sensitive_text(info.error_message)
+    )
     stack = normalize_error_text(redact_sensitive_text(info.stack))
     stdout_tail = "\n".join(tail_lines(redact_sensitive_text(log_text)))
 

@@ -73,7 +73,9 @@ def record_repair_plan(
     return plan_id
 
 
-def set_plan_outcome(conn: sqlite3.Connection, plan_id: str, outcome: str) -> None:
+def set_plan_outcome(
+    conn: sqlite3.Connection, plan_id: str, outcome: str
+) -> None:
     """Record how a plan turned out."""
 
     conn.execute(
@@ -138,13 +140,16 @@ def has_ever_passed(conn: sqlite3.Connection, test_id: str) -> bool:
     """Return whether this test has passed in any prior attempt."""
 
     row = conn.execute(
-        "SELECT 1 FROM attempts WHERE test_id = ? AND status = 'passed' LIMIT 1",
+        "SELECT 1 FROM attempts WHERE test_id = ? AND status = 'passed' "
+        "LIMIT 1",
         (test_id,),
     ).fetchone()
     return row is not None
 
 
-def attempt_history_counts(conn: sqlite3.Connection, test_id: str) -> tuple[int, int]:
+def attempt_history_counts(
+    conn: sqlite3.Connection, test_id: str
+) -> tuple[int, int]:
     """Return prior attempt and failure-packet counts for one test."""
 
     row = conn.execute(

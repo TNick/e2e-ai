@@ -269,7 +269,10 @@ class TestApi:
         db = tmp_path / "state.sqlite3"
         conn = ensure_database(db)
         conn.execute(
-            "UPDATE agent_invocations SET role = ?, stdout_path = ? WHERE id = ?",
+            (
+                "UPDATE agent_invocations SET role = ?, stdout_path = ?"
+                " WHERE id = ?"
+            ),
             ("planner", str(log_path), "ai1"),
         )
         conn.execute(
@@ -418,7 +421,10 @@ class TestMonitorConfig:
 
         proj, _ = self._project(
             tmp_path,
-            "monitor: {host: 0.0.0.0, port: 9100, refresh_ms: 500, open: true}\n",
+            (
+                "monitor: {host: 0.0.0.0, port: 9100, refresh_ms: 500,"
+                " open: true}\n"
+            ),
         )
         m = load_effective_config(proj).monitor
         assert (m.host, m.port, m.refresh_ms, m.open_browser) == (

@@ -84,7 +84,9 @@ def reserve_quota(
     units = _TASK_CLASS_COST.get(task_class, 2)
     optimistic = snapshot.state == QUOTA_UNKNOWN
     if enough_quota(task_class, snapshot):
-        _ACTIVE_RESERVATIONS[plugin_id] = _ACTIVE_RESERVATIONS.get(plugin_id, 0) + units
+        _ACTIVE_RESERVATIONS[plugin_id] = (
+            _ACTIVE_RESERVATIONS.get(plugin_id, 0) + units
+        )
         return QuotaReservation(
             plugin_id=plugin_id,
             task_class=task_class,

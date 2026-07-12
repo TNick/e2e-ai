@@ -18,7 +18,10 @@ from .config import (
     load_effective_config,
 )
 from .config.detect import detect_target_layout
-from .config.scaffold import build_scaffold_from_detection, render_project_config_yaml
+from .config.scaffold import (
+    build_scaffold_from_detection,
+    render_project_config_yaml,
+)
 from .config.target import scope_flag_to_value
 from .db import database_path, ensure_database
 from .errors import ConfigError, DockerError, E2eAiError, TargetRuntimeError
@@ -66,9 +69,9 @@ def _repair_options(func):
         default=None,
         help="Only repair the first N tests.",
     )(func)
-    func = click.option("--test-id", default=None, help="Repair only this test id.")(
-        func
-    )
+    func = click.option(
+        "--test-id", default=None, help="Repair only this test id."
+    )(func)
     func = click.option(
         "--max-attempts",
         type=int,
@@ -100,7 +103,9 @@ def _repair_options(func):
     func = click.option(
         "--failed-only",
         is_flag=True,
-        help="Repair only tests that did not pass in the previous finished run.",
+        help=(
+            "Repair only tests that did not pass in the previous finished run."
+        ),
     )(func)
     func = click.option(
         "--start-runtime/--no-start-runtime",
@@ -205,7 +210,9 @@ def build_cli() -> click.Group:
     @click.version_option(_version(), prog_name="e2e-ai")
     @_project_root_option
     @_repair_options
-    @click.option("-v", "--verbose", count=True, help="Increase logging verbosity.")
+    @click.option(
+        "-v", "--verbose", count=True, help="Increase logging verbosity."
+    )
     @click.pass_context
     def cli(
         ctx: click.Context,
@@ -262,7 +269,10 @@ def build_cli() -> click.Group:
         click.echo(f"isolation backend: {config.isolation.backend}")
         runtime = config.target_runtime
         click.echo(f"target runtime: {runtime.backend}")
-        if runtime.backend == "docker_compose" and runtime.docker_compose is not None:
+        if (
+            runtime.backend == "docker_compose"
+            and runtime.docker_compose is not None
+        ):
             compose = runtime.docker_compose
             click.echo(f"runtime compose files: {len(compose.compose_files)}")
             if compose.services:
@@ -304,7 +314,9 @@ def build_cli() -> click.Group:
 
     # ── init ────────────────────────────────────────────────────────────────
     @cli.command()
-    @click.option("--force", is_flag=True, help="Overwrite an existing project config.")
+    @click.option(
+        "--force", is_flag=True, help="Overwrite an existing project config."
+    )
     @click.option(
         "--target-scope",
         type=click.Choice(
@@ -401,14 +413,20 @@ def build_cli() -> click.Group:
     # ── run (single execution pass, no agents) ──────────────────────────────
     @cli.command()
     @_project_root_option
-    @click.option("--test-id", default=None, help="Run only the test with this id.")
-    @click.option("--all", "run_all", is_flag=True, help="Run all runnable tests.")
+    @click.option(
+        "--test-id", default=None, help="Run only the test with this id."
+    )
+    @click.option(
+        "--all", "run_all", is_flag=True, help="Run all runnable tests."
+    )
     @click.option(
         "--fail-fast",
         is_flag=True,
         help="Stop at the first failing test (default: continue).",
     )
-    @click.option("--limit", type=int, default=None, help="Only run the first N tests.")
+    @click.option(
+        "--limit", type=int, default=None, help="Only run the first N tests."
+    )
     @click.option(
         "--rediscover/--no-rediscover",
         default=True,
@@ -447,7 +465,9 @@ def build_cli() -> click.Group:
             discover_inventory(config)
         ensure_state_layout(config)
         backend = _prepare_backend(config)
-        conn = ensure_database(database_path(config), project_id=config.project_id)
+        conn = ensure_database(
+            database_path(config), project_id=config.project_id
+        )
         try:
             loop = FixLoop(
                 config,
@@ -458,7 +478,7 @@ def build_cli() -> click.Group:
                 dry_run=True,
             )
             loop.ensure_dirs()
-            # dry_run makes the loop execute each test once and stop before agents.
+            # dry_run runs each test once and stops before agents.
             summary = loop.run(
                 limit=limit,
                 test_ids=[test_id] if test_id else None,
@@ -535,7 +555,9 @@ def build_cli() -> click.Group:
         registry = AgentRegistry.from_config(config)
         statuses = registry.check_logins()
         if not statuses:
-            click.echo("No agents are referenced by planner/implementer/instrumenter.")
+            click.echo(
+                "No agents are referenced by planner/implementer/instrumenter."
+            )
             return
         any_bad = False
         for status in statuses:
@@ -578,14 +600,17 @@ def build_cli() -> click.Group:
 
     @db.command(name="template")
     @_project_root_option
-    @click.option("--refresh", is_flag=True, help="Recreate the template if it exists.")
+    @click.option(
+        "--refresh", is_flag=True, help="Recreate the template if it exists."
+    )
     def db_template(project_root: Path, refresh: bool) -> None:
         """Create (or refresh) the pristine template database."""
 
         config = _load(project_root)
         if config.isolation.backend not in POSTGRES_BACKENDS:
             raise click.ClickException(
-                f"isolation backend {config.isolation.backend!r} has no template DB"
+                f"isolation backend {config.isolation.backend!r} "
+                "has no template DB"
             )
         context = _isolation_context(config)
         try:
@@ -606,8 +631,11 @@ def build_cli() -> click.Group:
         "reports",
         multiple=True,
         type=click.Path(path_type=Path, exists=True),
-        help="Gate an existing Playwright JSON report (file or dir). Repeatable. "
-        "Accepts sharded runs. When omitted, the full suite is run once.",
+        help=(
+            "Gate an existing Playwright JSON report (file or dir). "
+            "Repeatable. Accepts sharded runs. When omitted, the full "
+            "suite is run once."
+        ),
     )
     @click.option(
         "--allow-skips",
@@ -621,7 +649,10 @@ def build_cli() -> click.Group:
         help="Refresh the inventory before running (run mode only).",
     )
     @click.option(
-        "--limit", type=int, default=None, help="Only run the first N tests (run mode)."
+        "--limit",
+        type=int,
+        default=None,
+        help="Only run the first N tests (run mode).",
     )
     @click.option(
         "--start-runtime/--no-start-runtime",
@@ -654,7 +685,9 @@ def build_cli() -> click.Group:
             discover_inventory(config)
         ensure_state_layout(config)
         backend = _prepare_backend(config)
-        conn = ensure_database(database_path(config), project_id=config.project_id)
+        conn = ensure_database(
+            database_path(config), project_id=config.project_id
+        )
         try:
             loop = FixLoop(
                 config,
@@ -676,7 +709,9 @@ def build_cli() -> click.Group:
     @cli.command()
     @_project_root_option
     @click.option(
-        "--dry-run", is_flag=True, help="Show what would be removed without doing it."
+        "--dry-run",
+        is_flag=True,
+        help="Show what would be removed without doing it.",
     )
     @click.option(
         "--purge-artifacts",
@@ -686,8 +721,10 @@ def build_cli() -> click.Group:
     @click.option(
         "--stale-runs",
         is_flag=True,
-        help="Mark orphaned running repair runs as stopped when their master PID "
-        "is gone.",
+        help=(
+            "Mark orphaned running repair runs as stopped when their "
+            "master PID is gone."
+        ),
     )
     def cleanup(
         project_root: Path,
@@ -756,7 +793,10 @@ def build_cli() -> click.Group:
         "--refresh-ms",
         type=int,
         default=None,
-        help="Live-refresh interval hint in ms (default: monitor.refresh_ms or 1000).",
+        help=(
+            "Live-refresh interval hint in ms "
+            "(default: monitor.refresh_ms or 1000)."
+        ),
     )
     @click.option(
         "--db",
@@ -818,11 +858,13 @@ def build_cli() -> click.Group:
             state_dir = config.state_dir
             proot = config.project_root
 
-        # Resolve host/port/refresh: CLI flag > config monitor section > default.
+        # Resolve host/port/refresh: CLI flag > config monitor > default.
         monitor_cfg = config.monitor if config is not None else MonitorConfig()
         host = host if host is not None else monitor_cfg.host
         port = port if port is not None else monitor_cfg.port
-        refresh_ms = refresh_ms if refresh_ms is not None else monitor_cfg.refresh_ms
+        refresh_ms = (
+            refresh_ms if refresh_ms is not None else monitor_cfg.refresh_ms
+        )
         open_browser = open_browser or monitor_cfg.open_browser
 
         # Full merged config (defaults + user + project) for the Settings page.
@@ -834,9 +876,9 @@ def build_cli() -> click.Group:
 
         if host not in ("127.0.0.1", "localhost", "::1"):
             click.echo(
-                f"WARNING: binding to {host} exposes the read-only monitor beyond "
-                "this machine. A future release will require an access token for "
-                "non-loopback hosts.",
+                f"WARNING: binding to {host} exposes the read-only "
+                "monitor beyond this machine. A future release will "
+                "require an access token for non-loopback hosts.",
                 err=True,
             )
 
@@ -919,7 +961,9 @@ def _gate_reports(paths: list[Path], *, allow_skips: bool) -> bool:
             totals[key] += int(stats.get(key, 0))
 
     if parsed == 0:
-        raise click.ClickException("none of the given files are Playwright reports")
+        raise click.ClickException(
+            "none of the given files are Playwright reports"
+        )
 
     click.echo(
         "VERIFY reports: {expected} passed, {unexpected} failed, "
@@ -947,7 +991,9 @@ def _cleanup_databases(
     dropped = 0
     failed: list[tuple[str, str]] = []
     context = _isolation_context(config)
-    for manifest_path in sorted(config.state_dir.rglob("cleanup-manifest.json")):
+    for manifest_path in sorted(
+        config.state_dir.rglob("cleanup-manifest.json")
+    ):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:

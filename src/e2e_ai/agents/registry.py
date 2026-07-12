@@ -29,8 +29,12 @@ AgentFactory = Callable[[AgentConfig, "EffectiveConfig"], AgentPlugin]
 
 BUILTIN_AGENT_FACTORIES: dict[str, AgentFactory] = {
     "codex": lambda cfg, effective: create_codex_agent(cfg, effective.routing),
-    "claude": lambda cfg, effective: create_claude_agent(cfg, effective.routing),
-    "cursor": lambda cfg, effective: create_cursor_agent(cfg, effective.routing),
+    "claude": lambda cfg, effective: create_claude_agent(
+        cfg, effective.routing
+    ),
+    "cursor": lambda cfg, effective: create_cursor_agent(
+        cfg, effective.routing
+    ),
 }
 
 _EXTRA_PLUGINS: dict[str, AgentPlugin] = {}
@@ -51,7 +55,9 @@ def load_entry_point_plugins() -> dict[str, AgentPlugin]:
         try:
             obj = ep.load()
         except Exception as exc:  # pragma: no cover - defensive
-            raise AgentError(f"failed to load agent plugin {ep.name!r}: {exc}") from exc
+            raise AgentError(
+                f"failed to load agent plugin {ep.name!r}: {exc}"
+            ) from exc
         if isinstance(obj, AgentPlugin):
             plugins[obj.id] = obj
         elif isinstance(obj, type) and issubclass(obj, AgentPlugin):
@@ -121,7 +127,9 @@ def create_agent_plugins(config: EffectiveConfig) -> dict[str, AgentPlugin]:
     return plugins
 
 
-def _spec_plugin_adapter(spec: AgentSpec, config: EffectiveConfig) -> AgentPlugin:
+def _spec_plugin_adapter(
+    spec: AgentSpec, config: EffectiveConfig
+) -> AgentPlugin:
     """Wrap a legacy :class:`CLIAgent` as an :class:`AgentPlugin`."""
 
     cli = CLIAgent(spec)
@@ -209,7 +217,8 @@ class AgentRegistry:
         except KeyError:
             available = ", ".join(sorted(self._plugins)) or "(none)"
             raise AgentError(
-                f"unknown or disabled agent {agent_id!r}; available: {available}"
+                f"unknown or disabled agent {agent_id!r}; "
+                f"available: {available}"
             ) from None
         return RoleBoundAgent(plugin, role="implementer", config=self._config)
 
@@ -221,7 +230,9 @@ class AgentRegistry:
     def selected_ids(self) -> list[str]:
         return selected_plugin_ids(self._config)
 
-    def check_logins(self, agent_ids: list[str] | None = None) -> list[LoginStatus]:
+    def check_logins(
+        self, agent_ids: list[str] | None = None
+    ) -> list[LoginStatus]:
         ids = agent_ids if agent_ids is not None else self.selected_ids()
         return [
             self._plugins[agent_id].check_login().to_login_status()
@@ -229,7 +240,9 @@ class AgentRegistry:
             if agent_id in self._plugins
         ]
 
-    def require_logins(self, agent_ids: list[str] | None = None) -> list[LoginStatus]:
+    def require_logins(
+        self, agent_ids: list[str] | None = None
+    ) -> list[LoginStatus]:
         if agent_ids is not None:
             statuses = self.check_logins(agent_ids)
             bad = [s for s in statuses if not s.logged_in]

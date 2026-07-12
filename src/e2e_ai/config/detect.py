@@ -129,7 +129,8 @@ def detect_target_layout(project_root: Path) -> TargetDetectionResult:
             suggested_scope="full_stack",
             confidence="medium",
             comments=tuple(
-                comments + [f"detected frontend at root and backend at {backend}"]
+                comments
+                + [f"detected frontend at root and backend at {backend}"]
             ),
         )
 
@@ -149,7 +150,10 @@ def detect_target_layout(project_root: Path) -> TargetDetectionResult:
         confidence="ambiguous",
         comments=tuple(
             comments
-            + ["no strong frontend/backend signals; defaulting to frontend_only"]
+            + [
+                "no strong frontend/backend signals; "
+                "defaulting to frontend_only"
+            ]
         ),
     )
 
@@ -162,7 +166,7 @@ def target_from_detection(
     backend_reference: bool = False,
     scope_override: str | None = None,
 ) -> TargetConfig:
-    """Build a :class:`TargetConfig` from detection and optional CLI overrides."""
+    """Build a :class:`TargetConfig` from detection and CLI overrides."""
 
     if scope_override is not None:
         scope = scope_override
@@ -177,7 +181,9 @@ def target_from_detection(
         detection.frontend_paths[0] if detection.frontend_paths else "."
     )
     surfaces: dict[str, TargetSurfaceConfig] = {
-        "frontend": TargetSurfaceConfig(path=front, editable=True, role="source"),
+        "frontend": TargetSurfaceConfig(
+            path=front, editable=True, role="source"
+        ),
     }
 
     back = backend_path or (

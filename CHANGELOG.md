@@ -31,6 +31,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Ruff line length aligned to the project standard (80 columns); `make delint`
+  and pre-commit now reformat code to that width instead of the previous
+  88-column default. Remaining overlong docstrings, SQL, and string literals
+  were wrapped manually so E501 is enforced in lint as well.
 - Monitor agent detail drawer formats Codex ``--json`` stdout as one card per
   item, expands ``\\r\\n`` / ``\\n`` in command output, pretty-prints nested
   planner JSON, and collapses long ``aggregated_output`` blocks.

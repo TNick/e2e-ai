@@ -19,7 +19,11 @@ from .models import (
     TestRunRequest,
     TestRunResult,
 )
-from .results import attempt_status_from_report, extract_failure, load_playwright_json
+from .results import (
+    attempt_status_from_report,
+    extract_failure,
+    load_playwright_json,
+)
 from .subprocess import (
     RUNNER_ERROR_EXIT_CODE,
     TIMEOUT_EXIT_CODE,
@@ -32,7 +36,7 @@ DEFAULT_TEST_TIMEOUT_SECONDS = 900
 
 
 def new_attempt_id(attempt_index: int) -> str:
-    """Return a work-directory-safe id combining the index and a random suffix."""
+    """Return a work-directory-safe id from index and random suffix."""
 
     return f"{attempt_index:03d}-{secrets.token_hex(3)}"
 
@@ -92,7 +96,9 @@ def run_playwright_test(
         line=request.line,
     )
     argv = build_playwright_test_command(config, test)
-    env = build_playwright_env(config, request, json_report_path, blob_report_path)
+    env = build_playwright_env(
+        config, request, json_report_path, blob_report_path
+    )
 
     write_command_manifest(attempt_dir, argv, test_dir, list(env.keys()))
     write_environment_manifest(attempt_dir, dict(request.environment))
@@ -108,7 +114,11 @@ def run_playwright_test(
     )
     duration = time.monotonic() - started
 
-    data = load_playwright_json(json_report_path) if json_report_path.is_file() else {}
+    data = (
+        load_playwright_json(json_report_path)
+        if json_report_path.is_file()
+        else {}
+    )
     if exit_code == TIMEOUT_EXIT_CODE:
         status = STATUS_TIMED_OUT
     elif exit_code == RUNNER_ERROR_EXIT_CODE and not data:
@@ -125,7 +135,9 @@ def run_playwright_test(
         stdout_path=log_path,
         stderr_path=log_path,
         json_report_path=json_report_path,
-        blob_report_path=(blob_report_path if blob_report_path.is_file() else None),
+        blob_report_path=(
+            blob_report_path if blob_report_path.is_file() else None
+        ),
         work_dir=attempt_dir,
         attempt_index=request.attempt_index,
         database_name=request.environment.get("E2E_AI_DATABASE"),
@@ -145,7 +157,9 @@ def run_attempt(
     extraction so the caller does not have to re-parse artifacts.
     """
 
-    result = run_playwright_test(config, request, timeout_seconds=timeout_seconds)
+    result = run_playwright_test(
+        config, request, timeout_seconds=timeout_seconds
+    )
     if result.passed:
         return result, None
 
@@ -156,7 +170,9 @@ def run_attempt(
     )
     log_text = ""
     if result.stdout_path.is_file():
-        log_text = result.stdout_path.read_text(encoding="utf-8", errors="replace")
+        log_text = result.stdout_path.read_text(
+            encoding="utf-8", errors="replace"
+        )
 
     failure = extract_failure(data or None, log_text)
     if result.status == STATUS_TIMED_OUT:

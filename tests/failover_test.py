@@ -11,7 +11,11 @@ from attrs import evolve
 from e2e_ai.agents.base import AgentPlugin
 from e2e_ai.agents.invocation import EXIT_AUTH_ERROR, EXIT_QUOTA_ERROR
 from e2e_ai.agents.registry import AgentRegistry, create_agent_plugins
-from e2e_ai.agents.router import _score_candidate, provider_pool, select_provider
+from e2e_ai.agents.router import (
+    _score_candidate,
+    provider_pool,
+    select_provider,
+)
 from e2e_ai.agents.routing_outcomes import (
     EXIT_EMPTY_OUTPUT,
     RoutingAction,
@@ -526,13 +530,17 @@ class TestFailoverLoop:
         )
         assert outcome.ok is False
         assert outcome.routing_action is RoutingAction.STOP_TEST
-        count = conn.execute("SELECT COUNT(*) FROM agent_invocations").fetchone()[0]
+        count = conn.execute(
+            "SELECT COUNT(*) FROM agent_invocations"
+        ).fetchone()[0]
         assert count == 2
         conn.close()
 
 
 class TestInvocationHistory:
-    def test_records_provider_order_and_switch_reason(self, tmp_path: Path) -> None:
+    def test_records_provider_order_and_switch_reason(
+        self, tmp_path: Path
+    ) -> None:
         db = tmp_path / "state.sqlite3"
         conn = ensure_database(db)
         _seed_project(conn)

@@ -59,7 +59,10 @@ FR_TWO_YAML = textwrap.dedent(
           - kind: directory
             name: uploads
             path: "playground/e2e/slots/{slot_id}/uploads"
-          - {kind: minio, name: lab-bucket, bucket: frtwo-lab, prefix: "e2e/{slot_id}/"}
+          - kind: minio
+            name: lab-bucket
+            bucket: frtwo-lab
+            prefix: "e2e/{slot_id}/"
     agents:
       planner: {plugin: codex, profile: difficult}
       implementer: {plugin: codex, profile: normal}
@@ -88,7 +91,9 @@ def _context(tmp_path: Path) -> IsolationContext:
 
 
 def _slots(project_root: Path):
-    return build_fr_two_slots(default_fr_two_config()["isolation"], project_root)
+    return build_fr_two_slots(
+        default_fr_two_config()["isolation"], project_root
+    )
 
 
 class TestFrTwoDetect:
@@ -120,7 +125,9 @@ class TestFrTwoSlot:
     def test_slot_database_name_is_stable(self, tmp_path):
         first = _slots(tmp_path)
         second = _slots(tmp_path)
-        assert [s.database_name for s in first] == [s.database_name for s in second]
+        assert [s.database_name for s in first] == [
+            s.database_name for s in second
+        ]
         assert first[0].database_name == "frtwo"
 
     def test_slot_database_user_is_stable(self, tmp_path):
@@ -134,7 +141,9 @@ class TestFrTwoSlot:
 
     def test_database_url_includes_password(self, tmp_path):
         slot = _slots(tmp_path)[0]
-        assert slot.database_url() == ("postgresql://frtwo:frtwo@127.0.0.1:5432/frtwo")
+        assert slot.database_url() == (
+            "postgresql://frtwo:frtwo@127.0.0.1:5432/frtwo"
+        )
 
 
 class TestFrTwoStorage:
@@ -142,7 +151,12 @@ class TestFrTwoStorage:
         context = _context(tmp_path)
         slot = _slots(context.project_root)[0]
         target_dir = (
-            context.project_root / "playground" / "e2e" / "slots" / slot.id / "uploads"
+            context.project_root
+            / "playground"
+            / "e2e"
+            / "slots"
+            / slot.id
+            / "uploads"
         )
         target_dir.mkdir(parents=True)
         (target_dir / "stale.txt").write_text("old", encoding="utf-8")

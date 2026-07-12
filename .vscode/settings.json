@@ -16,6 +16,8 @@
         "scls",
         "startbtn",
         "testclient",
+        "upserts",
         "webbrowser"
-    ]
+    ],
+    "flake8.args": ["--max-line-length=80"]
 }

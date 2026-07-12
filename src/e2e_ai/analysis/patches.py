@@ -87,7 +87,9 @@ def create_patch_from_worktree(
     output_path.write_text(diff.stdout, encoding="utf-8")
 
     names = _git(["diff", "--name-only", "HEAD"], worktree)
-    changed = tuple(line.strip() for line in names.stdout.splitlines() if line.strip())
+    changed = tuple(
+        line.strip() for line in names.stdout.splitlines() if line.strip()
+    )
     summary = f"{len(changed)} file(s) changed"
     return PatchArtifact(
         id=f"patch_{uuid.uuid4().hex[:12]}",
@@ -113,7 +115,9 @@ def validate_patch_applies(
         return  # empty patch is a no-op
     check = _git(["apply", "--check", str(patch.path)], project_root)
     if check.returncode != 0:
-        raise PatchError(f"patch does not apply cleanly: {check.stderr.strip()}")
+        raise PatchError(
+            f"patch does not apply cleanly: {check.stderr.strip()}"
+        )
 
 
 @contextlib.contextmanager
@@ -167,7 +171,9 @@ def apply_patch_atomically(
         transaction_dir = project_root / ".e2e-ai" / "patches" / patch.id
         transaction_dir.mkdir(parents=True, exist_ok=True)
         status = _git(["status", "--porcelain"], project_root)
-        (transaction_dir / "pre-status.txt").write_text(status.stdout, encoding="utf-8")
+        (transaction_dir / "pre-status.txt").write_text(
+            status.stdout, encoding="utf-8"
+        )
 
         # Snapshot files the patch touches so we can restore on failure.
         snapshot = transaction_dir / "snapshot"
@@ -223,7 +229,7 @@ def _restore_snapshot(
     project_root: Path,
     changed_files: Sequence[str],
 ) -> None:
-    """Restore only the files listed in the patch transaction (no hard reset)."""
+    """Restore listed patch-transaction files (no hard reset)."""
 
     for rel in changed_files:
         saved = snapshot / rel

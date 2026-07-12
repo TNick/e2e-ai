@@ -8,7 +8,9 @@ USER_CONFIG_RELATIVE: tuple[str, ...] = ("e2e-ai", "config.yml")
 
 BUILTIN_AGENT_PLUGINS: frozenset[str] = frozenset({"codex", "claude", "cursor"})
 
-AGENT_ROLES: frozenset[str] = frozenset({"planner", "implementer", "instrumenter"})
+AGENT_ROLES: frozenset[str] = frozenset(
+    {"planner", "implementer", "instrumenter"}
+)
 
 VALID_ISOLATION_BACKENDS: frozenset[str] = frozenset(
     {
@@ -25,4 +27,6 @@ VALID_RUNTIME_STOP_POLICIES: frozenset[str] = frozenset(
     {"never", "on_success", "always"}
 )
 
-VALID_RUNTIME_HEALTH_CHECK_KINDS: frozenset[str] = frozenset({"http", "tcp", "command"})
+VALID_RUNTIME_HEALTH_CHECK_KINDS: frozenset[str] = frozenset(
+    {"http", "tcp", "command"}
+)

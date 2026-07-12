@@ -79,7 +79,9 @@ def load_yaml_file(path: Path) -> dict[str, object]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise ConfigError(f"config file {path} must contain a mapping at the top level")
+        raise ConfigError(
+            f"config file {path} must contain a mapping at the top level"
+        )
     return raw
 
 
@@ -191,7 +193,9 @@ def _parse_agents(data: object) -> tuple[AgentConfig, ...]:
     if data is None:
         return ()
     mapping = _require_mapping(data, "agents")
-    return tuple(_parse_agent_entry(agent_id, raw) for agent_id, raw in mapping.items())
+    return tuple(
+        _parse_agent_entry(agent_id, raw) for agent_id, raw in mapping.items()
+    )
 
 
 def _parse_isolation_config(data: object) -> IsolationConfig:
@@ -219,7 +223,9 @@ def _parse_postgres_isolation(data: object) -> PostgresIsolationConfig:
     env_raw = mapping.get("env_template")
     env: dict[str, str] = {}
     if env_raw is not None:
-        env_mapping = _require_mapping(env_raw, "isolation.postgres.env_template")
+        env_mapping = _require_mapping(
+            env_raw, "isolation.postgres.env_template"
+        )
         env = {str(key): str(value) for key, value in env_mapping.items()}
     long_lived = mapping.get("long_lived_services")
     one_shot = mapping.get("one_shot_services")
@@ -240,7 +246,9 @@ def _parse_postgres_isolation(data: object) -> PostgresIsolationConfig:
         long_lived_services=(
             tuple(str(item) for item in long_lived) if long_lived else ()
         ),
-        one_shot_services=(tuple(str(item) for item in one_shot) if one_shot else ()),
+        one_shot_services=(
+            tuple(str(item) for item in one_shot) if one_shot else ()
+        ),
     )
 
 
@@ -249,7 +257,9 @@ def _parse_repair_policy(data: object) -> RepairPolicy:
         return RepairPolicy()
     mapping = _require_mapping(data, "repair_policy")
     defaults = DEFAULT_PROJECT_CONFIG.repair_policy
-    max_attempts = mapping.get("max_attempts_per_test", defaults.max_attempts_per_test)
+    max_attempts = mapping.get(
+        "max_attempts_per_test", defaults.max_attempts_per_test
+    )
     return RepairPolicy(
         max_attempts_per_test=int(max_attempts),
         max_same_signature_attempts=int(
@@ -264,7 +274,9 @@ def _parse_repair_policy(data: object) -> RepairPolicy:
                 defaults.require_external_blocker_for_successful_stop,
             )
         ),
-        max_run_seconds=int(mapping.get("max_run_seconds", defaults.max_run_seconds)),
+        max_run_seconds=int(
+            mapping.get("max_run_seconds", defaults.max_run_seconds)
+        ),
         max_test_seconds=int(
             mapping.get("max_test_seconds", defaults.max_test_seconds)
         ),
@@ -341,7 +353,9 @@ def _parse_playwright_mcp(data: object) -> PlaywrightMcpConfig:
     storage_raw = mapping.get("storage_state")
     storage_state = McpStorageStateConfig()
     if storage_raw is not None:
-        storage_map = _require_mapping(storage_raw, "playwright_mcp.storage_state")
+        storage_map = _require_mapping(
+            storage_raw, "playwright_mcp.storage_state"
+        )
         path = storage_map.get("path")
         storage_state = McpStorageStateConfig(
             mode=str(storage_map.get("mode", storage_state.mode)),
@@ -360,7 +374,9 @@ def _parse_playwright_mcp(data: object) -> PlaywrightMcpConfig:
         output_max_mb=int(mapping.get("output_max_mb", defaults.output_max_mb)),
         console_level=str(mapping.get("console_level", defaults.console_level)),
         snapshot_mode=str(mapping.get("snapshot_mode", defaults.snapshot_mode)),
-        image_responses=str(mapping.get("image_responses", defaults.image_responses)),
+        image_responses=str(
+            mapping.get("image_responses", defaults.image_responses)
+        ),
         unrestricted_file_access=bool(
             mapping.get(
                 "unrestricted_file_access",
@@ -436,7 +452,9 @@ def _parse_failover_config(data: object) -> FailoverConfig:
     retryable_classes: tuple[str, ...] = ()
     if retryable is not None:
         if not isinstance(retryable, list):
-            raise ConfigError("routing.failover.retryable_exit_classes must be a list")
+            raise ConfigError(
+                "routing.failover.retryable_exit_classes must be a list"
+            )
         retryable_classes = tuple(str(item) for item in retryable)
     max_switches = mapping.get(
         "max_switches_per_test",
@@ -457,12 +475,16 @@ def _parse_routing_config(data: object) -> RoutingConfig:
         allow_canary=bool(mapping.get("allow_canary", False)),
         canary_cache_seconds=int(mapping.get("canary_cache_seconds", 60)),
         canary_task_class=str(mapping.get("canary_task_class", "short")),
-        planner_requires_schema=bool(mapping.get("planner_requires_schema", True)),
+        planner_requires_schema=bool(
+            mapping.get("planner_requires_schema", True)
+        ),
         schema_retry_limit=int(mapping.get("schema_retry_limit", 1)),
         long_task_min_remaining_percent=int(
             mapping.get("long_task_min_remaining_percent", 25)
         ),
-        role_preferences=_parse_role_preferences(mapping.get("role_preferences")),
+        role_preferences=_parse_role_preferences(
+            mapping.get("role_preferences")
+        ),
         failover=_parse_failover_config(mapping.get("failover")),
     )
 
@@ -494,14 +516,18 @@ def _parse_target_config(data: object) -> TargetConfig:
     return TargetConfig(scope=scope, surfaces=surfaces)
 
 
-def _parse_runtime_health_checks(data: object) -> tuple[RuntimeHealthCheckConfig, ...]:
+def _parse_runtime_health_checks(
+    data: object,
+) -> tuple[RuntimeHealthCheckConfig, ...]:
     if data is None:
         return ()
     if not isinstance(data, list):
         raise ConfigError("target_runtime.health_checks must be a list")
     checks: list[RuntimeHealthCheckConfig] = []
     for index, raw in enumerate(data):
-        mapping = _require_mapping(raw, f"target_runtime.health_checks[{index}]")
+        mapping = _require_mapping(
+            raw, f"target_runtime.health_checks[{index}]"
+        )
         argv_raw = mapping.get("argv") or mapping.get("command")
         argv: tuple[str, ...] = ()
         if argv_raw is not None:
@@ -517,8 +543,12 @@ def _parse_runtime_health_checks(data: object) -> tuple[RuntimeHealthCheckConfig
                 name=str(mapping["name"]),
                 kind=str(mapping["kind"]),
                 timeout_seconds=int(mapping.get("timeout_seconds", 60)),
-                url=str(mapping["url"]) if mapping.get("url") is not None else None,
-                host=str(mapping["host"]) if mapping.get("host") is not None else None,
+                url=str(mapping["url"])
+                if mapping.get("url") is not None
+                else None,
+                host=str(mapping["host"])
+                if mapping.get("host") is not None
+                else None,
                 port=int(port) if port is not None else None,
                 argv=argv,
             )
@@ -540,7 +570,9 @@ def _parse_docker_compose_runtime(data: object) -> DockerComposeRuntimeConfig:
             command=str(start_map.get("command", start.command)),
             detach=bool(start_map.get("detach", start.detach)),
             build=bool(start_map.get("build", start.build)),
-            remove_orphans=bool(start_map.get("remove_orphans", start.remove_orphans)),
+            remove_orphans=bool(
+                start_map.get("remove_orphans", start.remove_orphans)
+            ),
             wait=bool(start_map.get("wait", start.wait)),
             timeout_seconds=int(
                 start_map.get("timeout_seconds", start.timeout_seconds)
@@ -551,7 +583,9 @@ def _parse_docker_compose_runtime(data: object) -> DockerComposeRuntimeConfig:
         stop = RuntimeStopConfig(
             policy=str(stop_map.get("policy", stop.policy)),
             command=str(stop_map.get("command", stop.command)),
-            remove_volumes=bool(stop_map.get("remove_volumes", stop.remove_volumes)),
+            remove_volumes=bool(
+                stop_map.get("remove_volumes", stop.remove_volumes)
+            ),
         )
     env_raw = mapping.get("env")
     env: dict[str, str] = {}
@@ -565,7 +599,9 @@ def _parse_docker_compose_runtime(data: object) -> DockerComposeRuntimeConfig:
     return DockerComposeRuntimeConfig(
         cwd=str(mapping.get("cwd", ".")),
         project_name=(
-            str(mapping["project_name"]) if mapping.get("project_name") else None
+            str(mapping["project_name"])
+            if mapping.get("project_name")
+            else None
         ),
         compose_files=tuple(str(item) for item in compose_files),
         env_files=tuple(str(item) for item in env_files),
@@ -574,7 +610,9 @@ def _parse_docker_compose_runtime(data: object) -> DockerComposeRuntimeConfig:
         env=env,
         start=start,
         stop=stop,
-        health_checks=_parse_runtime_health_checks(mapping.get("health_checks")),
+        health_checks=_parse_runtime_health_checks(
+            mapping.get("health_checks")
+        ),
     )
 
 
@@ -586,7 +624,9 @@ def _parse_target_runtime(data: object) -> TargetRuntimeConfig:
     docker_raw = mapping
     if mapping.get("compose_files") is None and mapping.get("docker_compose"):
         docker_raw = mapping.get("docker_compose")
-    elif backend == "docker_compose" and mapping.get("compose_files") is not None:
+    elif (
+        backend == "docker_compose" and mapping.get("compose_files") is not None
+    ):
         docker_raw = mapping
     elif backend == "docker_compose":
         docker_raw = mapping
@@ -621,7 +661,9 @@ def _parse_project_config(data: Mapping[str, object]) -> ProjectConfig:
         repair_policy=_parse_repair_policy(
             data.get("repair_policy") or data.get("repair")
         ),
-        full_verification=_parse_full_verification(data.get("full_verification")),
+        full_verification=_parse_full_verification(
+            data.get("full_verification")
+        ),
         playwright_mcp=_parse_playwright_mcp(data.get("playwright_mcp")),
         target=_parse_target_config(data.get("target")),
         target_runtime=_parse_target_runtime(data.get("target_runtime")),
@@ -640,7 +682,9 @@ def _parse_monitor_config(data: object) -> MonitorConfig:
         host=str(mapping.get("host", defaults.host)),
         port=int(port),
         refresh_ms=int(refresh),
-        open_browser=bool(mapping.get("open", mapping.get("open_browser", False))),
+        open_browser=bool(
+            mapping.get("open", mapping.get("open_browser", False))
+        ),
     )
 
 
@@ -663,8 +707,12 @@ def _merge_agent_configs(
             continue
         merged[agent.id] = AgentConfig(
             id=agent.id,
-            plugin=agent.plugin if agent.plugin is not None else existing.plugin,
-            profile=agent.profile if agent.profile is not None else existing.profile,
+            plugin=agent.plugin
+            if agent.plugin is not None
+            else existing.plugin,
+            profile=agent.profile
+            if agent.profile is not None
+            else existing.profile,
             enabled=agent.enabled,
             executable=(
                 agent.executable
@@ -722,7 +770,9 @@ def merge_config(
 ) -> EffectiveConfig:
     """Merge user and project configuration."""
 
-    merged_agents = _merge_agent_configs(user_config.agents, project_config.agents)
+    merged_agents = _merge_agent_configs(
+        user_config.agents, project_config.agents
+    )
     state_dir = (project_root / project_config.state_dir).resolve()
     full_verification = project_config.full_verification
     return EffectiveConfig(

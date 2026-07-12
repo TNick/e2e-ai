@@ -58,7 +58,9 @@ def _previous_failures_block(failures: list[dict]) -> str:
     for idx, fail in enumerate(failures, start=1):
         msg = str(fail.get("error_message", "")).strip().splitlines()[:1]
         phase = fail.get("_phase", "?")
-        lines.append(f"{idx}. [{phase}] {(msg[0] if msg else '(no message)')[:200]}")
+        lines.append(
+            f"{idx}. [{phase}] {(msg[0] if msg else '(no message)')[:200]}"
+        )
     return "\n".join(lines)
 
 
@@ -166,7 +168,8 @@ def build_implement_prompt(
         Working directory for scratch notes: {workdir}
 
         Test being fixed:
-        - {test.spec_file} › {test.title} (project: {test.project_name or "default"})
+        - {test.spec_file} › {test.title}
+          (project: {test.project_name or "default"})
 
         Rules:
         - Do NOT skip the test, add sleeps, or weaken assertions.

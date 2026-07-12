@@ -13,7 +13,9 @@ class TargetRuntime(Protocol):
     def start(self, context: RuntimeContext) -> RuntimeState:
         """Start support services and return their state."""
 
-    def wait_until_ready(self, context: RuntimeContext, state: RuntimeState) -> None:
+    def wait_until_ready(
+        self, context: RuntimeContext, state: RuntimeState
+    ) -> None:
         """Wait until the target runtime is ready for tests."""
 
     def stop(

@@ -33,7 +33,9 @@ class AgentCapabilities:
     permission_modes: tuple[str, ...] = field(factory=tuple)
     sandbox_modes: tuple[str, ...] = field(factory=tuple)
     models: tuple[str, ...] = field(factory=tuple)
-    prompt_transports: tuple[str, ...] = field(default=("stdin", "argument", "file"))
+    prompt_transports: tuple[str, ...] = field(
+        default=("stdin", "argument", "file")
+    )
     quota_method: str = field(default="unknown")
     quota_confidence: str = field(default="low")
     supports_mcp: bool = field(default=False)

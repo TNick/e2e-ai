@@ -20,7 +20,11 @@ from e2e_ai.mcp.client_configs import (
     render_codex_mcp_config,
     render_cursor_mcp_config,
 )
-from e2e_ai.mcp.models import AgentMcpAttachment, McpSessionSpec, PlaywrightMcpConfig
+from e2e_ai.mcp.models import (
+    AgentMcpAttachment,
+    McpSessionSpec,
+    PlaywrightMcpConfig,
+)
 from e2e_ai.mcp.playwright import build_playwright_mcp_argv, resolve_npx_command
 from e2e_ai.mcp.policy import (
     build_allowed_origins,
@@ -144,7 +148,9 @@ class TestMcpPolicy:
 
 
 class TestMcpCommand:
-    def test_builds_npx_command_with_pinned_version(self, tmp_path: Path) -> None:
+    def test_builds_npx_command_with_pinned_version(
+        self, tmp_path: Path
+    ) -> None:
         config = _config(tmp_path).playwright_mcp
         session = _session(tmp_path)
         argv = build_playwright_mcp_argv(config, session)
@@ -232,7 +238,9 @@ class TestPrompt:
         assert context.variant_key in text
         assert context.test_list_selector in text
 
-    def test_mcp_prompt_does_not_use_line_as_identity(self, tmp_path: Path) -> None:
+    def test_mcp_prompt_does_not_use_line_as_identity(
+        self, tmp_path: Path
+    ) -> None:
         context = _context()
         mcp = AgentMcpAttachment(enabled=True, session=_session(tmp_path))
         text = build_mcp_prompt_section(context=context, mcp=mcp)
@@ -256,7 +264,10 @@ class TestOrchestrator:
         )
 
     def test_mcp_failure_does_not_count_as_repair_attempt(self) -> None:
-        from e2e_ai.orchestrator.models import STATE_EXTERNAL_BLOCKER, RepairDecision
+        from e2e_ai.orchestrator.models import (
+            STATE_EXTERNAL_BLOCKER,
+            RepairDecision,
+        )
 
         decision = RepairDecision(
             action="mcp_blocker",

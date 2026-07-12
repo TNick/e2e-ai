@@ -104,7 +104,9 @@ def refresh_inventory(
 
     conn.execute(
         """
-        INSERT INTO projects (id, root_path, config_hash, created_at, updated_at)
+        INSERT INTO projects (
+            id, root_path, config_hash, created_at, updated_at
+        )
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             root_path = excluded.root_path,

@@ -42,7 +42,8 @@ def check_release_version(
     tag_version = normalized.removeprefix("v")
     if tag_version != version:
         raise ValueError(
-            f"release tag {normalized} does not match pyproject.toml version {version}"
+            f"release tag {normalized} does not match "
+            f"pyproject.toml version {version}"
         )
     return version
 

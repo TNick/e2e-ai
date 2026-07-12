@@ -103,7 +103,9 @@ def write_agent_mcp_config(
     allow = list(tools_allow or ())
     deny = list(tools_deny or ())
     if plugin_id == "codex":
-        content = render_codex_mcp_config(attachment, argv=argv, tools_allow=allow)
+        content = render_codex_mcp_config(
+            attachment, argv=argv, tools_allow=allow
+        )
         path = target_dir / "codex-mcp.toml"
     elif plugin_id == "claude":
         content = render_claude_mcp_config(

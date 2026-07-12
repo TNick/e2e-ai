@@ -45,7 +45,9 @@ class FrTwoSlot:
     def database_url(self, host: str = _DB_HOST, port: int = _DB_PORT) -> str:
         user = quote(self.database_user, safe="")
         password = quote(self.database_password, safe="")
-        return f"postgresql://{user}:{password}@{host}:{port}/{self.database_name}"
+        return (
+            f"postgresql://{user}:{password}@{host}:{port}/{self.database_name}"
+        )
 
     def frontend_url(self) -> str:
         return f"http://{_DB_HOST}:{self.frontend_port}"
@@ -91,7 +93,11 @@ def build_fr_two_slots(
                 database_password=password,
                 backend_port=backend_port,
                 frontend_port=frontend_port,
-                root_dir=project_root / "playground" / "e2e" / "slots" / slot_id,
+                root_dir=project_root
+                / "playground"
+                / "e2e"
+                / "slots"
+                / slot_id,
             )
         )
     return slots
@@ -151,8 +157,12 @@ class FrTwoIsolationBackend:
     ) -> EnvironmentLease:
         return lease_fr_two_slot(context, test, attempt_id, backend=self)
 
-    def cleanup_environment(self, lease: EnvironmentLease, outcome: str) -> None:
-        slot = next((s for s in self.slots if s.id == lease.id.split(":")[0]), None)
+    def cleanup_environment(
+        self, lease: EnvironmentLease, outcome: str
+    ) -> None:
+        slot = next(
+            (s for s in self.slots if s.id == lease.id.split(":")[0]), None
+        )
         if slot is not None:
             release_fr_two_slot(self._context(), slot, outcome)
 
@@ -172,11 +182,15 @@ def create_fr_two_isolation_backend(
 
     isolation = fr_two_isolation_section(config)
     slots = build_fr_two_slots(isolation, config.project_root)
-    return FrTwoIsolationBackend(config=config, isolation=isolation, slots=tuple(slots))
+    return FrTwoIsolationBackend(
+        config=config, isolation=isolation, slots=tuple(slots)
+    )
 
 
 def _psql_baseline_available(context: IsolationContext) -> bool:
-    return shutil_which("psql") is not None or shutil_which("docker") is not None
+    return (
+        shutil_which("psql") is not None or shutil_which("docker") is not None
+    )
 
 
 def prepare_fr_two_baseline(context: IsolationContext) -> None:

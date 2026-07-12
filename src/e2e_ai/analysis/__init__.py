@@ -19,7 +19,11 @@ from .context import (
     load_previous_plans,
     trim_repair_context,
 )
-from .failure_packet import FailureClassifier, FailurePacket, build_failure_packet
+from .failure_packet import (
+    FailureClassifier,
+    FailurePacket,
+    build_failure_packet,
+)
 from .instrumentation import (
     TEMP_MARKER,
     build_instrumentation_request,

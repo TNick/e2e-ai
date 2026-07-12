@@ -68,7 +68,9 @@ def build_failure_packet_id(signature: str, attempt_id: str) -> str:
     return f"fp_{digest}"
 
 
-def detect_generic_family(spec_file: str, error_message: str, stack: str) -> str:
+def detect_generic_family(
+    spec_file: str, error_message: str, stack: str
+) -> str:
     """Classify a failure into a generic, project-independent family."""
 
     haystack = f"{error_message}\n{stack}".lower()
@@ -129,7 +131,13 @@ def detect_generic_family(spec_file: str, error_message: str, stack: str) -> str
     if has("beforeall", "beforeeach", "fixture", "setup", "global setup"):
         return FAMILY_TEST_SETUP
     if has(
-        "expect(", "expected", "tobe", "toequal", "tohavetext", "assertion", "received"
+        "expect(",
+        "expected",
+        "tobe",
+        "toequal",
+        "tohavetext",
+        "assertion",
+        "received",
     ):
         return FAMILY_ASSERTION
     return FAMILY_UNKNOWN

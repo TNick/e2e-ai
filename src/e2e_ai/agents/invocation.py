@@ -77,7 +77,9 @@ def run_agent_command(
             stderr_target = stderr_handle
         try:
             stdin_target = (
-                subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL
+                subprocess.PIPE
+                if stdin_data is not None
+                else subprocess.DEVNULL
             )
             process = subprocess.Popen(
                 list(argv),
@@ -178,7 +180,9 @@ def write_agent_invocation_manifest(
                 {
                     "mcp_server": mcp.server_name,
                     "mcp_config_path": (
-                        str(mcp.client_config_path) if mcp.client_config_path else None
+                        str(mcp.client_config_path)
+                        if mcp.client_config_path
+                        else None
                     ),
                     "mcp_output_dir": str(session.output_dir),
                     "mcp_version": mcp_version,
