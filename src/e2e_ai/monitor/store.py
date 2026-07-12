@@ -15,11 +15,41 @@ from typing import Any
 from ..errors import E2eAiError
 
 # Schema version the monitor understands (see e2e_ai/db/migrations.py).
-EXPECTED_SCHEMA_VERSION = 2
+EXPECTED_SCHEMA_VERSION = 3
 
 _MISSING_DB_MESSAGE = (
     "No state database found. Run `e2e-ai discover` or `e2e-ai repair` first."
 )
+_MAX_LOG_BYTES = 512_000
+
+
+def _read_log_file(path: str | None, *, max_bytes: int = _MAX_LOG_BYTES) -> str | None:
+    """Return log text from ``path``, or ``None`` when missing/unreadable."""
+
+    if not path:
+        return None
+    try:
+        file_path = Path(path)
+        if not file_path.is_file():
+            return None
+        size = file_path.stat().st_size
+        if size <= max_bytes:
+            return file_path.read_text(encoding="utf-8", errors="replace")
+        with file_path.open("rb") as handle:
+            data = handle.read(max_bytes)
+        text = data.decode("utf-8", errors="replace")
+        omitted = size - max_bytes
+        return f"{text}\n… truncated ({omitted} bytes omitted) …"
+    except OSError:
+        return None
+
+
+def _decode_plan_outcome(result_json: Any) -> str | None:
+    data = _decode_json(result_json)
+    if not isinstance(data, dict):
+        return None
+    outcome = data.get("outcome")
+    return str(outcome) if outcome else None
 
 
 class MonitorError(E2eAiError):
@@ -195,11 +225,48 @@ class MonitorStore:
         return run
 
     # ── tests ───────────────────────────────────────────────────────────────
-    def list_tests(self, *, include_excluded: bool = True) -> list[dict[str, Any]]:
-        where = "" if include_excluded else "WHERE excluded = 0"
-        return self._rows(
-            f"SELECT * FROM tests {where} ORDER BY spec_file, line, title"
+    def _normalize_test_counts(self, row: dict[str, Any]) -> dict[str, Any]:
+        test = dict(row)
+        test["run_count"] = int(test.get("run_count") or 0)
+        test["failure_count"] = int(test.get("failure_count") or 0)
+        return test
+
+    def list_tests(
+        self,
+        *,
+        include_excluded: bool = True,
+        project_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if not include_excluded:
+            clauses.append("t.excluded = 0")
+        if project_id:
+            clauses.append("t.project_id = ?")
+            params.append(project_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._rows(
+            f"""
+            SELECT
+                t.*,
+                COALESCE(h.run_count, 0) AS run_count,
+                COALESCE(h.failure_count, 0) AS failure_count
+            FROM tests t
+            LEFT JOIN (
+                SELECT
+                    a.test_id,
+                    COUNT(a.id) AS run_count,
+                    COUNT(fp.id) AS failure_count
+                FROM attempts a
+                LEFT JOIN failure_packets fp ON fp.attempt_id = a.id
+                GROUP BY a.test_id
+            ) h ON h.test_id = t.id
+            {where}
+            ORDER BY t.spec_file, t.line, t.line IS NULL, t.title, t.id
+            """,
+            tuple(params),
         )
+        return [self._normalize_test_counts(row) for row in rows]
 
     def get_test(self, test_id: str) -> dict[str, Any] | None:
         test = self._row("SELECT * FROM tests WHERE id = ?", (test_id,))
@@ -214,7 +281,28 @@ class MonitorStore:
             "WHERE test_id = ? ORDER BY created_at",
             (test_id,),
         )
+        counts = self._row(
+            """
+            SELECT
+                COUNT(a.id) AS run_count,
+                COUNT(fp.id) AS failure_count
+            FROM attempts a
+            LEFT JOIN failure_packets fp ON fp.attempt_id = a.id
+            WHERE a.test_id = ?
+            """,
+            (test_id,),
+        )
+        test["run_count"] = int((counts or {}).get("run_count") or 0)
+        test["failure_count"] = int((counts or {}).get("failure_count") or 0)
+        test["agents"] = self._list_agents_for_test(test_id)
         return test
+
+    def _list_agents_for_test(self, test_id: str) -> list[dict[str, Any]]:
+        rows = self._rows(
+            "SELECT * FROM agent_invocations WHERE test_id = ? ORDER BY started_at",
+            (test_id,),
+        )
+        return [self._normalize_agent_row(row) for row in rows]
 
     # ── attempts / failures / agents ────────────────────────────────────────
     def get_attempt(self, attempt_id: str) -> dict[str, Any] | None:
@@ -240,17 +328,86 @@ class MonitorStore:
         packet["payload"] = _decode_json(packet.pop("payload_json", None))
         return packet
 
+    def _normalize_agent_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        agent = dict(row)
+        agent["command"] = _decode_json(agent.pop("command_json", None))
+        agent["provider_order"] = _decode_json(agent.pop("provider_order_json", None))
+        agent.pop("quota_snapshot_json", None)
+        return agent
+
+    def _repair_plan_for_invocation(
+        self,
+        *,
+        test_id: str,
+        agent_id: str,
+        started_at: str,
+    ) -> dict[str, Any] | None:
+        plan = self._row(
+            "SELECT id, plan_text, created_at, result_json FROM repair_plans "
+            "WHERE test_id = ? AND agent_id = ? AND created_at >= ? "
+            "ORDER BY created_at ASC LIMIT 1",
+            (test_id, agent_id, started_at),
+        )
+        if plan is None:
+            plan = self._row(
+                "SELECT id, plan_text, created_at, result_json FROM repair_plans "
+                "WHERE test_id = ? AND agent_id = ? "
+                "ORDER BY ABS(julianday(created_at) - julianday(?)) ASC LIMIT 1",
+                (test_id, agent_id, started_at),
+            )
+        if plan is None:
+            return None
+        plan["outcome"] = _decode_plan_outcome(plan.pop("result_json", None))
+        return plan
+
     def list_agents(self, *, limit: int = 100) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 1000))
         rows = self._rows(
-            "SELECT * FROM agent_invocations ORDER BY started_at DESC LIMIT ?",
+            "SELECT a.*, t.title AS test_title "
+            "FROM agent_invocations a "
+            "LEFT JOIN tests t ON t.id = a.test_id "
+            "ORDER BY a.started_at DESC LIMIT ?",
             (limit,),
         )
-        for row in rows:
-            row["command"] = _decode_json(row.pop("command_json", None))
-            row["provider_order"] = _decode_json(row.pop("provider_order_json", None))
-            row.pop("quota_snapshot_json", None)
-        return rows
+        return [self._normalize_agent_row(row) for row in rows]
+
+    def get_agent(self, invocation_id: str) -> dict[str, Any] | None:
+        row = self._row(
+            "SELECT a.*, t.title AS test_title, t.spec_file AS test_spec_file "
+            "FROM agent_invocations a "
+            "LEFT JOIN tests t ON t.id = a.test_id "
+            "WHERE a.id = ?",
+            (invocation_id,),
+        )
+        if row is None:
+            return None
+        agent = self._normalize_agent_row(row)
+        stdout_path = agent.get("stdout_path")
+        stderr_path = agent.get("stderr_path")
+        agent["stdout"] = _read_log_file(stdout_path)
+        if stderr_path and stderr_path != stdout_path:
+            agent["stderr"] = _read_log_file(stderr_path)
+        else:
+            agent["stderr"] = None
+        test_id = agent.get("test_id")
+        if test_id:
+            agent["test"] = {
+                "id": test_id,
+                "title": agent.pop("test_title", None),
+                "spec_file": agent.pop("test_spec_file", None),
+            }
+        else:
+            agent.pop("test_title", None)
+            agent.pop("test_spec_file", None)
+        if agent.get("role") == "planner" and test_id:
+            plan = self._repair_plan_for_invocation(
+                test_id=test_id,
+                agent_id=agent["agent_id"],
+                started_at=agent["started_at"],
+            )
+            if plan is not None:
+                agent["repair_plan"] = plan
+        return agent
 
     # ── active shards ───────────────────────────────────────────────────────
     def active_shards(self) -> list[dict[str, Any]]:

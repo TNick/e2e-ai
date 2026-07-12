@@ -11,6 +11,7 @@
         "pypi",
         "pyproject",
         "scls",
-        "startbtn"
+        "startbtn",
+        "webbrowser"
     ]
 }

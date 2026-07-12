@@ -76,7 +76,11 @@ def register_routes(
 
     @app.get("/api/tests")
     def tests() -> dict[str, Any]:
-        return {"items": _guard(store.list_tests)}
+        return {
+            "items": _guard(
+                lambda: store.list_tests(project_id=info.project_id or None)
+            )
+        }
 
     @app.get("/api/tests/{test_id}")
     def test(test_id: str) -> dict[str, Any]:
@@ -102,6 +106,16 @@ def register_routes(
     @app.get("/api/agents")
     def agents(limit: int = Query(100)) -> dict[str, Any]:
         return {"items": _guard(lambda: store.list_agents(limit=limit))}
+
+    @app.get("/api/agents/{invocation_id}")
+    def agent(invocation_id: str) -> dict[str, Any]:
+        data = _guard(lambda: store.get_agent(invocation_id))
+        if data is None:
+            raise HTTPException(
+                status_code=404,
+                detail="agent invocation not found",
+            )
+        return data
 
     @app.get("/api/shards")
     def shards() -> dict[str, Any]:

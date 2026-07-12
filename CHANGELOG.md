@@ -6,6 +6,24 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Runs record the master repair-loop process PID; on startup, orphaned
+  ``running`` runs (missing PID or dead process) are marked ``stopped`` with
+  reason ``process interrupted``, and open attempts are marked ``interrupted``.
+  Pressing Ctrl+C during ``repair``, ``run``, or ``verify`` does the same for
+  the active run immediately.
+- ``e2e-ai cleanup --stale-runs`` to reconcile stale runs manually (also runs
+  automatically when opening the state database for repair/run/verify/discover/ui).
+- Monitor Tests page: **Runs** column shows total recorded executions per test,
+  with failure packet count in parentheses when non-zero (e.g. ``5 (2)``).
+- Monitor Tests detail drawer: failed attempts link to agent invocations
+  (planner / implementer / instrumenter) for that run; full agent history is
+  listed below the attempts table.
+
+- Monitor Agents page: click an invocation to open its repair plan (planner),
+  implementation log (implementer), or other agent output in the detail drawer.
+  New ``GET /api/agents/{id}`` endpoint serves plan text and log files.
+- ``e2e-ai repair --failed-only`` to repair only tests that did not pass in
+  the previous finished run.
 - Provider failover and multi-agent routing: per-role ordered provider pools
   (`routing.role_preferences`), automatic rotation to the next configured
   provider on retryable agent failures, per-invocation failover metadata in the
@@ -13,11 +31,36 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Repair loop prints prior attempt history as ``(N runs, M failures)`` when a
+  test has been executed before (replacing the misleading ``(regression)`` /
+  ``(seen before)`` labels).
 - The repair loop prints `Starting Docker containers...` after scheduling when
   Docker Compose startup is required, so long container bootstraps are easier
   to understand.
 - fr-two example config assigns planner to Codex, implementer to Claude, and
   instrumenter to Cursor so local runs exercise all three providers.
+
+### Fixed
+
+- `e2e-ai repair --failed-only` now ignores previous empty bookkeeping runs and
+  no longer creates a new empty run when there are no failed tests to schedule.
+- Repair attempt budgets now apply to the current run, so historical failures
+  no longer cause `--failed-only` repairs to stop before invoking agents.
+- Agent subprocesses no longer inherit parent stdin for argument/file prompt
+  transports, and Codex now receives large repair prompts through an explicit
+  stdin pipe instead of fragile command-line arguments.
+- Regression failures can now escalate directly to instrumentation without
+  crashing the repair state machine.
+- Codex planner/implementer runs no longer fail on Windows when structured
+  output is enabled: JSON Schema is written to a temporary file for
+  ``codex exec --output-schema`` instead of passing inline JSON (which Codex
+  treats as a file path).
+- Repair loop no longer crashes with an invalid `planning` → `rerun` state
+  transition when the planner agent fails after failover.
+- Monitor UI closes the detail drawer when navigating to a different page, so
+  run/test/failure details no longer cover the new view.
+- Monitor Tests **Runs** column now stays in sync with attempt history (counts
+  refresh while the detail drawer is open and when opening a test detail).
 
 ## [0.1.3] - 2026-07-12
 
@@ -64,11 +107,15 @@ All notable changes to this project will be documented in this file.
 - Initial implementation
 - Run GitHub tests on push
 - e2e-ai verify and e2e-ai cleanup implemented
-- We're now able to run a project-speciific startup
+- We're now able to run a project-specific startup
 - Add ui/monitoring
 - Update ui
 
 ### Fixed
+
+- Monitor Tests **Runs** column now matches attempt history: counts use a joined
+  aggregate query, refresh while the detail drawer is open, and update when a
+  test detail is opened.
 
 - Monitor dashboard no longer flickers every second: auto-refresh is gated on the state revision and skips the loading placeholder, so an idle view stays put.
 - Launching a command from the monitor now transitions the open drawer straight to the command output, instead of briefly flashing the Commands page first.

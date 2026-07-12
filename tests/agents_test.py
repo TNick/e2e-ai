@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from e2e_ai.agents.capabilities import QUOTA_EXHAUSTED, QUOTA_READY, QUOTA_UNKNOWN
@@ -9,6 +10,7 @@ from e2e_ai.agents.invocation import (
     EXIT_AUTH_ERROR,
     EXIT_QUOTA_ERROR,
     classify_agent_exit,
+    run_agent_command,
 )
 from e2e_ai.agents.plugins.claude import build_plan_mode_argv
 from e2e_ai.agents.plugins.codex import build_login_argv
@@ -94,6 +96,44 @@ class TestAgentExit:
         assert classify_agent_exit(1, "rate limit exceeded", "") == EXIT_QUOTA_ERROR
 
 
+class TestAgentInvocation:
+    def test_argument_transport_does_not_inherit_stdin(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        class FakeProcess:
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                seen["input"] = input
+                seen["timeout"] = timeout
+                return None
+
+        def fake_popen(argv, **kwargs):
+            seen["argv"] = argv
+            seen["stdin"] = kwargs["stdin"]
+            return FakeProcess()
+
+        monkeypatch.setattr("e2e_ai.agents.invocation.subprocess.Popen", fake_popen)
+
+        exit_code = run_agent_command(
+            ["agent", "prompt as arg"],
+            cwd=tmp_path,
+            env={},
+            stdin_data=None,
+            stdout_path=tmp_path / "agent.log",
+            stderr_path=tmp_path / "agent.log",
+            timeout_seconds=10,
+        )
+
+        assert exit_code == 0
+        assert seen["stdin"] == subprocess.DEVNULL
+        assert seen["input"] is None
+
+
 class TestRouter:
     def test_selects_planner_and_implementer_roles(self, monkeypatch) -> None:
         config = _config(planner="codex", implementer="claude")
@@ -126,6 +166,24 @@ class TestCodex:
     def test_builds_login_command(self) -> None:
         argv = build_login_argv("codex")
         assert argv == ["codex", "login", "status"]
+
+    def test_uses_stdin_prompt_transport(self) -> None:
+        agent = create_agent_plugins(_config())["codex"]
+        assert agent.prompt_transport == "stdin"
+
+    def test_build_exec_argv_uses_schema_file_path(self, tmp_path: Path) -> None:
+        from e2e_ai.agents.plugins.codex import build_exec_argv
+
+        schema_path = tmp_path / "plan-schema.json"
+        schema_path.write_text('{"type":"object"}', encoding="utf-8")
+        argv = build_exec_argv(
+            "codex",
+            sandbox="read-only",
+            schema_path=schema_path,
+        )
+        idx = argv.index("--output-schema")
+        assert argv[idx + 1] == str(schema_path)
+        assert "{" not in argv[idx + 1]
 
 
 class TestClaude:

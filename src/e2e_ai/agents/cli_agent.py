@@ -137,6 +137,9 @@ class CLIAgent(LegacyAgentRunner):
             output_path = log_dir / f"{self.id}-{stamp}.log"
 
         try:
+            stdin_kwargs = {}
+            if stdin_data is None:
+                stdin_kwargs["stdin"] = subprocess.DEVNULL
             proc = subprocess.run(
                 command,
                 cwd=str(workdir),
@@ -145,6 +148,7 @@ class CLIAgent(LegacyAgentRunner):
                 timeout=timeout,
                 check=False,
                 env=run_env,
+                **stdin_kwargs,
             )
             stdout = proc.stdout.decode("utf-8", errors="replace")
             stderr = proc.stderr.decode("utf-8", errors="replace")

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ...config.models import AgentConfig, RoutingConfig
-from ..capabilities import QUOTA_READY
+from ..capabilities import QUOTA_READY, AgentResult
 from ..quota import QuotaSnapshot
 from ..schemas import (
     ImplementRequest,
@@ -11,9 +13,8 @@ from ..schemas import (
     PlanRequest,
     implementation_output_schema,
     plan_output_schema,
-    schema_json,
 )
-from ._common import BaseCLIPlugin
+from ._common import BaseCLIPlugin, invoke_argv, write_schema_file
 
 
 def build_login_argv(executable: str) -> list[str]:
@@ -26,15 +27,15 @@ def build_exec_argv(
     executable: str,
     *,
     sandbox: str,
-    schema: dict[str, object] | None = None,
+    schema_path: Path | None = None,
     approval: str | None = None,
     profile_args: list[str] | None = None,
 ) -> list[str]:
-    """Build argv for ``codex exec`` with sandbox and optional schema."""
+    """Build argv for ``codex exec`` with sandbox and optional schema file."""
 
     argv = [executable, "exec", "--json"]
-    if schema is not None:
-        argv.extend(["--output-schema", schema_json(schema)])
+    if schema_path is not None:
+        argv.extend(["--output-schema", str(schema_path)])
     argv.extend(["--sandbox", sandbox])
     if approval is not None:
         argv.extend(["--ask-for-approval", approval])
@@ -60,7 +61,7 @@ class CodexAgent(BaseCLIPlugin):
     login_argv = ("login", "status")
     quota_method = "app-server"
     quota_confidence = "high"
-    prompt_transport = "argument"
+    prompt_transport = "stdin"
     supports_mcp = True
     supports_runtime_mcp_config = True
     supports_mcp_tool_allowlist = True
@@ -83,6 +84,70 @@ class CodexAgent(BaseCLIPlugin):
             detail="codex app-server quota preflight deferred",
         )
 
+    def _codex_exec(
+        self,
+        request: PlanRequest | ImplementRequest | InstrumentRequest,
+        *,
+        sandbox: str,
+        schema: dict[str, object] | None,
+        approval: str | None,
+        quota_task: str,
+    ) -> AgentResult:
+        """Run Codex with optional schema written to a temporary file."""
+
+        schema_path = write_schema_file(schema) if schema is not None else None
+        cleanup = [schema_path] if schema_path is not None else None
+        argv = build_exec_argv(
+            self.executable,
+            sandbox=sandbox,
+            schema_path=schema_path,
+            approval=approval,
+            profile_args=_profile_args(request.profile),
+        )
+        snap = self.quota(quota_task)
+        return invoke_argv(
+            self.id,
+            argv,
+            cwd=request.work_dir,
+            prompt=request.prompt,
+            transport=self.prompt_transport,
+            env=self._run_env(),
+            timeout_seconds=request.timeout_seconds,
+            log_dir=request.log_dir,
+            quota_before=snap.state,
+            cleanup_paths=cleanup,
+            **self._mcp_invoke_kwargs(request),
+        )
+
+    def plan(self, request: PlanRequest) -> AgentResult:
+        schema = plan_output_schema() if request.require_schema else None
+        return self._codex_exec(
+            request,
+            sandbox="read-only",
+            schema=schema,
+            approval=None,
+            quota_task="difficult",
+        )
+
+    def implement(self, request: ImplementRequest) -> AgentResult:
+        return self._codex_exec(
+            request,
+            sandbox="workspace-write",
+            schema=implementation_output_schema(),
+            approval="never",
+            quota_task="normal",
+        )
+
+    def instrument(self, request: InstrumentRequest) -> AgentResult:
+        schema = plan_output_schema() if request.require_schema else None
+        return self._codex_exec(
+            request,
+            sandbox="workspace-write",
+            schema=schema,
+            approval="never",
+            quota_task="difficult",
+        )
+
     def build_plan_argv(
         self,
         request: PlanRequest,
@@ -90,18 +155,20 @@ class CodexAgent(BaseCLIPlugin):
         schema: dict[str, object] | None,
     ) -> list[str]:
         schema = schema or plan_output_schema()
+        schema_path = write_schema_file(schema)
         return build_exec_argv(
             self.executable,
             sandbox="read-only",
-            schema=schema,
+            schema_path=schema_path,
             profile_args=_profile_args(request.profile),
         )
 
     def build_implement_argv(self, request: ImplementRequest) -> list[str]:
+        schema_path = write_schema_file(implementation_output_schema())
         return build_exec_argv(
             self.executable,
             sandbox="workspace-write",
-            schema=implementation_output_schema(),
+            schema_path=schema_path,
             approval="never",
             profile_args=_profile_args(request.profile),
         )
@@ -113,10 +180,11 @@ class CodexAgent(BaseCLIPlugin):
         schema: dict[str, object] | None,
     ) -> list[str]:
         schema = schema or plan_output_schema()
+        schema_path = write_schema_file(schema)
         return build_exec_argv(
             self.executable,
             sandbox="workspace-write",
-            schema=schema,
+            schema_path=schema_path,
             approval="never",
             profile_args=_profile_args(request.profile),
         )

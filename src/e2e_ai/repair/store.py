@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import uuid
@@ -57,14 +58,21 @@ class RepairStore:
         self._conn.commit()
 
     # ── runs ────────────────────────────────────────────────────────────────
-    def start_run(self, project_id: str, *, reason: str | None = None) -> str:
+    def start_run(
+        self,
+        project_id: str,
+        *,
+        reason: str | None = None,
+        pid: int | None = None,
+    ) -> str:
         run_id = _new_id("run")
+        master_pid = os.getpid() if pid is None else pid
         self._conn.execute(
             """
-            INSERT INTO runs (id, project_id, started_at, status, reason)
-            VALUES (?, ?, ?, 'running', ?)
+            INSERT INTO runs (id, project_id, started_at, status, reason, pid)
+            VALUES (?, ?, ?, 'running', ?, ?)
             """,
-            (run_id, project_id, _now(), reason),
+            (run_id, project_id, _now(), reason, master_pid),
         )
         self._commit()
         return run_id
@@ -77,6 +85,39 @@ class RepairStore:
             (_now(), status, reason, run_id),
         )
         self._commit()
+
+    def latest_finished_run_id(self, project_id: str) -> str | None:
+        """Return the most recently finished run id with recorded attempts."""
+
+        row = self._conn.execute(
+            """
+            SELECT r.id
+            FROM runs r
+            WHERE r.project_id = ?
+                AND r.finished_at IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM attempts a WHERE a.run_id = r.id
+                )
+            ORDER BY r.finished_at DESC
+            LIMIT 1
+            """,
+            (project_id,),
+        ).fetchone()
+        return str(row["id"]) if row is not None else None
+
+    def test_ids_not_passed_in_run(self, run_id: str) -> set[str]:
+        """Return test ids attempted in ``run_id`` that never passed in that run."""
+
+        rows = self._conn.execute(
+            """
+            SELECT test_id FROM attempts
+            WHERE run_id = ?
+            GROUP BY test_id
+            HAVING MAX(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) = 0
+            """,
+            (run_id,),
+        ).fetchall()
+        return {str(row["test_id"]) for row in rows}
 
     # ── attempts ────────────────────────────────────────────────────────────
     # Attempt rows are created/finished by ``e2e_ai.runner.store``; this store

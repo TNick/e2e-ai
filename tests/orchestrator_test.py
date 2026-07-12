@@ -25,22 +25,30 @@ from e2e_ai.orchestrator import (
     run_one_test_until_resolved,
     validate_transition,
 )
+from e2e_ai.orchestrator.decisions import should_stop_test
 from e2e_ai.orchestrator.loop import _will_start_docker_containers, run_repair_loop
 from e2e_ai.orchestrator.models import (
     STATE_FAILED,
+    STATE_INSTRUMENTING,
     STATE_PASSED,
     STATE_PLANNING,
+    STATE_REGRESSED,
     STATE_RUNNING,
 )
 from e2e_ai.orchestrator.prompts import build_planner_prompt
 from e2e_ai.orchestrator.state_machine import (
     EVENT_FAIL,
+    EVENT_INSTRUMENT,
     EVENT_PASS,
     EVENT_PLAN,
     EVENT_START,
     InvalidTransitionError,
 )
-from e2e_ai.orchestrator.store import record_repair_plan
+from e2e_ai.orchestrator.store import (
+    attempt_history_counts,
+    format_test_history_suffix,
+    record_repair_plan,
+)
 from e2e_ai.repair.store import RepairStore
 from e2e_ai.runner import TestRunResult as RunResult
 from e2e_ai.runner import create_attempt_record, finish_attempt_record
@@ -193,6 +201,21 @@ class _FakeAgent:
         )
 
 
+class _FailingPlannerAgent(_FakeAgent):
+    def plan(self, request):
+        self.calls.append(request.prompt)
+        from e2e_ai.agents.capabilities import AgentResult
+        from e2e_ai.agents.invocation import classify_agent_exit
+
+        return AgentResult(
+            agent_id=self.id,
+            exit_code=1,
+            stdout="",
+            stderr="planner bombed",
+            exit_class=classify_agent_exit(1, "", "planner bombed"),
+        )
+
+
 class _FakeRegistry:
     def __init__(self) -> None:
         self._plugins = {
@@ -241,6 +264,7 @@ class TestStateMachine:
         assert next_state(STATE_RUNNING, EVENT_PASS) == STATE_PASSED
         assert next_state(STATE_RUNNING, EVENT_FAIL) == STATE_FAILED
         assert next_state(STATE_FAILED, EVENT_PLAN) == STATE_PLANNING
+        assert next_state(STATE_REGRESSED, EVENT_INSTRUMENT) == STATE_INSTRUMENTING
 
     def test_invalid_transition_raises(self):
         with pytest.raises(InvalidTransitionError):
@@ -363,6 +387,39 @@ class TestDockerStartupMessages:
         assert messages[1] == "Starting Docker containers..."
         conn.close()
 
+    def test_keyboard_interrupt_marks_run_stopped(self, tmp_path, monkeypatch):
+        from e2e_ai.repair.stale_runs import REASON_PROCESS_INTERRUPTED
+
+        config = _config(tmp_path)
+        conn = _seeded_conn(config)
+
+        def fake_run(config, request, **kwargs):
+            _ = config, request, kwargs
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("e2e_ai.orchestrator.loop.run_attempt", fake_run)
+        messages: list[str] = []
+        summary = run_repair_loop(
+            config,
+            conn,
+            _FakeRegistry(),
+            isolation=_FakeIsolation(),
+            reporter=messages.append,
+            start_runtime=False,
+        )
+
+        assert summary.interrupted is True
+        assert summary.status == "stopped"
+        assert summary.reason == REASON_PROCESS_INTERRUPTED
+        assert "Interrupted." in messages
+        row = conn.execute(
+            "SELECT status, reason FROM runs WHERE id = ?",
+            (summary.run_id,),
+        ).fetchone()
+        assert row["status"] == "stopped"
+        assert row["reason"] == REASON_PROCESS_INTERRUPTED
+        conn.close()
+
     def test_failed_test_invokes_planner_then_implementer(self, tmp_path, monkeypatch):
         config = _config(tmp_path)
         conn = _seeded_conn(config)
@@ -393,6 +450,39 @@ class TestDockerStartupMessages:
         assert registry._plugins["codex"].calls
         plans = RepairStore(conn).previous_plans(TEST.id)
         assert plans and plans[0].outcome == "implemented"
+        conn.close()
+
+    def test_planner_failure_retries_without_invalid_transition(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        config = _config(tmp_path)
+        conn = _seeded_conn(config)
+        failing_planner = _FailingPlannerAgent("claude")
+        registry = _FakeRegistry()
+        registry._plugins["claude"] = failing_planner
+        registry.agents["planner"] = _LegacyBound(failing_planner)
+        seq = [(False, FailureInfo(error_message="boom"))] * 3
+        it = iter(seq)
+
+        def fake_run(config, request, **kwargs):
+            passed, failure = next(it)
+            return _result(tmp_path, passed=passed), failure
+
+        monkeypatch.setattr("e2e_ai.orchestrator.loop.run_attempt", fake_run)
+        run_id = create_repair_run(conn, config)
+        state = run_one_test_until_resolved(
+            conn=conn,
+            config=config,
+            test=TEST,
+            run_id=run_id,
+            isolation=_FakeIsolation(),
+            agents=registry._plugins,
+            registry=registry,
+        )
+        assert state.state == "exhausted_attempts"
+        assert len(failing_planner.calls) == 2
         conn.close()
 
     def test_second_failure_invokes_instrumentation(self, tmp_path, monkeypatch):
@@ -484,11 +574,233 @@ class TestDockerStartupMessages:
             registry=registry,
             dry_run_agents=True,
         )
-        assert state.is_regression
+        assert state.has_prior_pass
         context = build_repair_context(conn, packet)
         prompt = build_planner_prompt(context, config=config, test=TEST)
         assert "old plan that failed" in prompt
         assert "FAILED PLAN" in prompt
+        conn.close()
+
+
+class TestTestHistory:
+    def test_format_test_history_suffix(self) -> None:
+        assert format_test_history_suffix(3, 1) == " (3 runs, 1 failures)"
+
+    def test_history_counts_from_database(self, tmp_path) -> None:
+        config = _config(tmp_path)
+        conn = _seeded_conn(config)
+        run_id = create_repair_run(conn, config)
+        passed = _result(tmp_path, passed=True)
+        create_attempt_record(
+            conn,
+            attempt_id=passed.attempt_id,
+            run_id=run_id,
+            test_id=TEST.id,
+            attempt_index=0,
+            work_dir=str(passed.work_dir),
+        )
+        finish_attempt_record(conn, passed)
+        failed = _result(tmp_path, passed=False, attempt_index=1)
+        create_attempt_record(
+            conn,
+            attempt_id=failed.attempt_id,
+            run_id=run_id,
+            test_id=TEST.id,
+            attempt_index=1,
+            work_dir=str(failed.work_dir),
+        )
+        finish_attempt_record(conn, failed)
+        packet = build_failure_packet(
+            test=TEST,
+            attempt=failed,
+            report=None,
+            failure=FailureInfo(error_message="boom"),
+        )
+        insert_failure_packet(conn, packet)
+
+        assert attempt_history_counts(conn, TEST.id) == (2, 1)
+        conn.close()
+
+    def test_run_one_test_prints_history_suffix(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        config = _config(tmp_path)
+        conn = _seeded_conn(config)
+        registry = _FakeRegistry()
+        run_id = create_repair_run(conn, config)
+        prior = _result(tmp_path, passed=True)
+        create_attempt_record(
+            conn,
+            attempt_id=prior.attempt_id,
+            run_id=run_id,
+            test_id=TEST.id,
+            attempt_index=0,
+            work_dir=str(prior.work_dir),
+        )
+        finish_attempt_record(conn, prior)
+
+        def fake_run(config, request, **kwargs):
+            _ = config, request, kwargs
+            return _result(tmp_path, passed=True, attempt_index=1), None
+
+        monkeypatch.setattr("e2e_ai.orchestrator.loop.run_attempt", fake_run)
+        messages: list[str] = []
+
+        run_one_test_until_resolved(
+            conn=conn,
+            config=config,
+            test=TEST,
+            run_id=run_id,
+            isolation=_FakeIsolation(),
+            agents=registry._plugins,
+            registry=registry,
+            reporter=messages.append,
+        )
+        assert any("(1 runs, 0 failures)" in message for message in messages)
+        conn.close()
+
+
+class TestFailedOnlyRepair:
+    """``only_failed`` limits repair to tests that failed in the previous run."""
+
+    OTHER = DiscoveredTest(
+        id="demo_other123",
+        title="other thing",
+        spec_file="b.spec.ts",
+        project_name="chromium",
+        line=8,
+        raw_list_line="b.spec.ts › other thing",
+    )
+
+    def test_only_failed_schedules_previous_failures(self, tmp_path, monkeypatch):
+        config = _config(tmp_path)
+        conn = ensure_database(database_path(config))
+        refresh_inventory(conn, config, Inventory(tests=(TEST, self.OTHER)))
+        store = RepairStore(conn)
+        prev_run = store.start_run(config.project_id, reason="seed")
+        passed = _result(tmp_path, passed=True)
+        failed = _result(tmp_path, passed=False)
+        create_attempt_record(
+            conn,
+            run_id=prev_run,
+            test_id=TEST.id,
+            attempt_index=0,
+            work_dir=str(passed.work_dir),
+            attempt_id=passed.attempt_id,
+        )
+        finish_attempt_record(conn, passed)
+        create_attempt_record(
+            conn,
+            run_id=prev_run,
+            test_id=self.OTHER.id,
+            attempt_index=0,
+            work_dir=str(failed.work_dir),
+            attempt_id=failed.attempt_id,
+        )
+        finish_attempt_record(conn, failed)
+        store.finish_run(prev_run, status="failed")
+        empty_run = store.start_run(config.project_id, reason="empty")
+        store.finish_run(empty_run, status="failed")
+
+        scheduled: list[str] = []
+        registry = _FakeRegistry()
+
+        def fake_run(config, request, **kwargs):
+            scheduled.append(request.test_id)
+            return _result(tmp_path, passed=True), None
+
+        monkeypatch.setattr("e2e_ai.orchestrator.loop.run_attempt", fake_run)
+        messages: list[str] = []
+        run_repair_loop(
+            config,
+            conn,
+            registry,
+            isolation=_FakeIsolation(),
+            reporter=messages.append,
+            only_failed=True,
+            start_runtime=False,
+        )
+        assert scheduled == [self.OTHER.id]
+        assert messages[0].startswith(
+            f"Scheduling 1 test(s) that failed in run {prev_run}."
+        )
+        conn.close()
+
+    def test_only_failed_no_failures_does_not_create_empty_run(self, tmp_path):
+        config = _config(tmp_path)
+        conn = ensure_database(database_path(config))
+        refresh_inventory(conn, config, Inventory(tests=(TEST,)))
+        store = RepairStore(conn)
+        prev_run = store.start_run(config.project_id, reason="seed")
+        passed = _result(tmp_path, passed=True)
+        create_attempt_record(
+            conn,
+            run_id=prev_run,
+            test_id=TEST.id,
+            attempt_index=0,
+            work_dir=str(passed.work_dir),
+            attempt_id=passed.attempt_id,
+        )
+        finish_attempt_record(conn, passed)
+        store.finish_run(prev_run, status="passed")
+
+        messages: list[str] = []
+        summary = run_repair_loop(
+            config,
+            conn,
+            _FakeRegistry(),
+            isolation=_FakeIsolation(),
+            reporter=messages.append,
+            only_failed=True,
+            start_runtime=False,
+        )
+
+        run_count = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        assert summary.all_green
+        assert summary.run_id is None
+        assert run_count == 1
+        assert messages == [f"Scheduling 0 test(s) that failed in run {prev_run}."]
+        conn.close()
+
+
+class TestRepairBudget:
+    """Repair attempt budgets are scoped to the current run."""
+
+    def test_historical_failures_do_not_exhaust_new_run(self, tmp_path):
+        config = _config(tmp_path)
+        conn = ensure_database(database_path(config))
+        refresh_inventory(conn, config, Inventory(tests=(TEST,)))
+        store = RepairStore(conn)
+        old_run = store.start_run(config.project_id, reason="old")
+        new_run = store.start_run(config.project_id, reason="new")
+
+        for index in range(3):
+            failed = _result(tmp_path, passed=False, attempt_index=index)
+            create_attempt_record(
+                conn,
+                run_id=old_run,
+                test_id=TEST.id,
+                attempt_index=index,
+                work_dir=str(failed.work_dir),
+                attempt_id=failed.attempt_id,
+            )
+            finish_attempt_record(conn, failed)
+
+        current = _result(tmp_path, passed=False, attempt_index=0)
+        create_attempt_record(
+            conn,
+            run_id=new_run,
+            test_id=TEST.id,
+            attempt_index=0,
+            work_dir=str(current.work_dir),
+            attempt_id=current.attempt_id,
+        )
+        finish_attempt_record(conn, current)
+
+        assert not should_stop_test(conn, TEST.id, 3, run_id=new_run)
+        assert should_stop_test(conn, TEST.id, 3)
         conn.close()
 
 

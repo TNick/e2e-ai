@@ -41,6 +41,8 @@ from ..mcp.sessions import (
 )
 from ..models import FailureInfo, TestStatus
 from ..planner import plan_is_blocked, test_selector
+from ..repair.stale_runs import REASON_PROCESS_INTERRUPTED, mark_run_interrupted
+from ..repair.store import RepairStore
 from ..runner import (
     TestRunRequest,
     TestRunResult,
@@ -92,8 +94,10 @@ from .state_machine import (
     next_state,
 )
 from .store import (
+    attempt_history_counts,
     create_repair_run,
     finish_repair_run,
+    format_test_history_suffix,
     has_ever_passed,
     record_agent_invocation,
     record_repair_plan,
@@ -175,6 +179,7 @@ class LoopSummary:
     run_id: str | None = None
     status: str = "failed"
     reason: str | None = None
+    interrupted: bool = False
 
     @property
     def passed(self) -> list[TestReport]:
@@ -190,7 +195,9 @@ class LoopSummary:
 
     @property
     def all_green(self) -> bool:
-        return bool(self.reports) and not self.failed and not self.blocked
+        return (bool(self.reports) or self.status == "passed") and (
+            not self.failed and not self.blocked
+        )
 
 
 def _isolation_context(
@@ -716,7 +723,12 @@ def handle_failed_attempt(
             reason="failure classified as external blocker",
         )
 
-    if should_stop_test(conn, test.id, policy.max_attempts_per_test):
+    if should_stop_test(
+        conn,
+        test.id,
+        policy.max_attempts_per_test,
+        run_id=run_id,
+    ):
         return RepairDecision(
             action="exhausted",
             next_state=STATE_EXHAUSTED,
@@ -888,13 +900,17 @@ def run_one_test_until_resolved(
     """Run and repair one test until it passes or blocks."""
 
     say = reporter or (lambda _msg: None)
-    regression = has_ever_passed(conn, test.id)
+    has_prior_pass = has_ever_passed(conn, test.id)
     repair_state = TestRepairState(
         test_id=test.id,
-        is_regression=regression,
+        has_prior_pass=has_prior_pass,
     )
     selector = test_selector(test)
-    say(">> {}{}".format(selector, " (regression)" if regression else ""))
+    run_count, failure_count = attempt_history_counts(conn, test.id)
+    history_suffix = (
+        format_test_history_suffix(run_count, failure_count) if run_count > 0 else ""
+    )
+    say(f">> {selector}{history_suffix}")
 
     attempt_budget = max(1, config.repair_policy.max_attempts_per_test)
     attempt_index = 0
@@ -933,7 +949,7 @@ def run_one_test_until_resolved(
             return repair_state
 
         # Failed run.
-        if regression and repair_state.state == STATE_RUNNING and attempt == 0:
+        if has_prior_pass and repair_state.state == STATE_RUNNING and attempt == 0:
             _transition(repair_state, EVENT_REGRESS)
         elif repair_state.state == STATE_RERUNNING:
             _transition(repair_state, EVENT_FAIL)
@@ -1021,7 +1037,12 @@ def run_one_test_until_resolved(
             say(f"  [fail] {repair_state.note}")
             return repair_state
 
-        _transition(repair_state, EVENT_RERUN)
+        # Rerun after a successful implement; otherwise apply the decision state
+        # (e.g. planner failed while still in planning).
+        if repair_state.state == STATE_IMPLEMENTED:
+            _transition(repair_state, EVENT_RERUN)
+        else:
+            repair_state.state = decision.next_state
 
     repair_state.state = STATE_EXHAUSTED
     repair_state.note = "attempts exhausted"
@@ -1052,6 +1073,7 @@ def run_repair_loop(
     reporter: Reporter | None = None,
     limit: int | None = None,
     test_ids: list[str] | None = None,
+    only_failed: bool = False,
     dry_run_agents: bool = False,
     stop_on_failure: bool = False,
     start_runtime: bool = True,
@@ -1068,6 +1090,17 @@ def run_repair_loop(
 
     pending = list_runnable_tests(conn, config.project_id)
     catalog = list(pending)
+    previous_run_id: str | None = None
+    if only_failed:
+        repair_store = RepairStore(conn)
+        previous_run_id = repair_store.latest_finished_run_id(config.project_id)
+        if previous_run_id is None:
+            say("No previous finished run with attempts; nothing to repair.")
+            summary = LoopSummary(status="passed", reason="no previous run")
+            return summary
+        failed_ids = repair_store.test_ids_not_passed_in_run(previous_run_id)
+        pending = [t for t in pending if t.id in failed_ids]
+        catalog = list(pending)
     if test_ids is not None:
         wanted = set(test_ids)
         pending = [t for t in pending if t.id in wanted]
@@ -1076,9 +1109,16 @@ def run_repair_loop(
         pending = pending[:limit]
 
     summary = LoopSummary()
+    if only_failed and not pending:
+        say(f"Scheduling 0 test(s) that failed in run {previous_run_id}.")
+        summary.status = "passed"
+        summary.reason = "no failed tests"
+        return summary
+
     run_id = create_repair_run(conn, config)
     summary.run_id = run_id
     stopped = False
+    interrupted = False
     stop_reason: str | None = None
 
     if min_tests_per_slot is not None:
@@ -1086,6 +1126,8 @@ def run_repair_loop(
             f"Scheduling shard coverage: at least {min_tests_per_slot} passing "
             f"test(s) per slot."
         )
+    elif only_failed:
+        say(f"Scheduling {len(pending)} test(s) that failed in run {previous_run_id}.")
     else:
         say(f"Scheduling {len(pending)} test(s).")
     if _will_start_docker_containers(config, start_runtime=start_runtime):
@@ -1145,16 +1187,27 @@ def run_repair_loop(
                         stopped = True
                         stop_reason = "stop on failure"
                         break
+    except KeyboardInterrupt:
+        interrupted = True
+        stopped = True
+        stop_reason = REASON_PROCESS_INTERRUPTED
+        say("Interrupted.")
     finally:
-        if stopped:
+        if interrupted:
+            mark_run_interrupted(conn, run_id)
             status = "stopped"
+        elif stopped:
+            status = "stopped"
+            finish_repair_run(conn, run_id, status, stop_reason)
         elif summary.all_green:
             status = "passed"
+            finish_repair_run(conn, run_id, status, stop_reason)
         else:
             status = "failed"
-        finish_repair_run(conn, run_id, status, stop_reason)
+            finish_repair_run(conn, run_id, status, stop_reason)
         summary.status = status
         summary.reason = stop_reason
+        summary.interrupted = interrupted
 
     return summary
 
@@ -1208,6 +1261,7 @@ class FixLoop:
         *,
         limit: int | None = None,
         test_ids: list[str] | None = None,
+        only_failed: bool = False,
         stop_on_failure: bool = False,
         start_runtime: bool = True,
         min_tests_per_slot: int | None = None,
@@ -1220,6 +1274,7 @@ class FixLoop:
             reporter=self._say,
             limit=limit,
             test_ids=test_ids,
+            only_failed=only_failed,
             dry_run_agents=self.dry_run,
             stop_on_failure=stop_on_failure,
             start_runtime=start_runtime,

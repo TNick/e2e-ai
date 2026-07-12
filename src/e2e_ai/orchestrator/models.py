@@ -17,6 +17,7 @@ STATE_RERUNNING = "rerunning"
 STATE_INSTRUMENTING = "instrumenting"
 STATE_EXTERNAL_BLOCKER = "external_blocker"
 STATE_REGRESSED = "regressed"
+
 STATE_EXHAUSTED = "exhausted_attempts"
 
 TERMINAL_STATES = frozenset(
@@ -66,7 +67,7 @@ class TestRepairState:
     state: str = field(default=STATE_PENDING)
     attempt_count: int = field(default=0)
     repair_round: int = field(default=0)
-    is_regression: bool = field(default=False)
+    has_prior_pass: bool = field(default=False)
     last_packet_id: str | None = field(default=None)
     last_plan_id: str | None = field(default=None)
     note: str = field(default="")

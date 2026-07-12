@@ -235,7 +235,7 @@ def discover_inventory(config: EffectiveConfig) -> DiscoveryCounts:
     db_path = database_path(config)
     output = run_playwright_list(config)
     inventory = parse_playwright_list(output, config.project_id)
-    conn = ensure_database(db_path)
+    conn = ensure_database(db_path, project_id=config.project_id)
     with transaction(conn):
         refresh_inventory(conn, config, inventory)
     discovered = len(inventory.tests)

@@ -98,6 +98,11 @@ def _repair_options(func):
         help="Alias for --dry-run-agents.",
     )(func)
     func = click.option(
+        "--failed-only",
+        is_flag=True,
+        help="Repair only tests that did not pass in the previous finished run.",
+    )(func)
+    func = click.option(
         "--start-runtime/--no-start-runtime",
         default=True,
         show_default=True,
@@ -117,6 +122,7 @@ def _run_repair(
     dry_run_agents: bool,
     dry_run: bool,
     start_runtime: bool,
+    failed_only: bool,
 ) -> None:
     """Run the repair loop using the shared CLI options."""
 
@@ -144,7 +150,7 @@ def _run_repair(
         discover_inventory(config)
     ensure_state_layout(config)
     backend = _prepare_backend(config)
-    conn = ensure_database(database_path(config))
+    conn = ensure_database(database_path(config), project_id=config.project_id)
     try:
         loop = FixLoop(
             config,
@@ -158,15 +164,31 @@ def _run_repair(
         summary = loop.run(
             limit=limit,
             test_ids=[test_id] if test_id else None,
+            only_failed=failed_only,
             start_runtime=start_runtime,
         )
     except TargetRuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
         conn.close()
+    if failed_only and not summary.reports and summary.all_green:
+        click.echo("No runnable tests failed in the previous run.")
+        raise SystemExit(0)
     if test_id and not summary.reports:
         raise click.ClickException(f"no runnable test with id {test_id!r}")
+    _exit_from_summary(summary)
+
+
+def _exit_from_summary(summary, *, verify: bool = False) -> None:  # type: ignore[no-untyped-def]
     _print_summary(summary)
+    if summary.interrupted:
+        raise SystemExit(130)
+    if verify:
+        if summary.all_green:
+            click.echo("VERIFY: clean ✅")
+            raise SystemExit(0)
+        click.echo("VERIFY: not clean ❌")
+        raise SystemExit(1)
     raise SystemExit(0 if summary.all_green else 1)
 
 
@@ -197,6 +219,7 @@ def build_cli() -> click.Group:
         dry_run_agents: bool,
         dry_run: bool,
         start_runtime: bool,
+        failed_only: bool,
     ) -> None:
         """AI-driven Playwright e2e repair loop."""
 
@@ -217,6 +240,7 @@ def build_cli() -> click.Group:
                 dry_run_agents=dry_run_agents,
                 dry_run=dry_run,
                 start_runtime=start_runtime,
+                failed_only=failed_only,
             )
 
     # ── doctor ──────────────────────────────────────────────────────────────
@@ -423,7 +447,7 @@ def build_cli() -> click.Group:
             discover_inventory(config)
         ensure_state_layout(config)
         backend = _prepare_backend(config)
-        conn = ensure_database(database_path(config))
+        conn = ensure_database(database_path(config), project_id=config.project_id)
         try:
             loop = FixLoop(
                 config,
@@ -448,8 +472,7 @@ def build_cli() -> click.Group:
             conn.close()
         if test_id and not summary.reports:
             raise click.ClickException(f"no runnable test with id {test_id!r}")
-        _print_summary(summary)
-        raise SystemExit(0 if summary.all_green else 1)
+        _exit_from_summary(summary)
 
     # ── repair (the full fix loop) ──────────────────────────────────────────
     @cli.command()
@@ -465,6 +488,7 @@ def build_cli() -> click.Group:
         dry_run_agents: bool,
         dry_run: bool,
         start_runtime: bool,
+        failed_only: bool,
     ) -> None:
         """Run the AI fix loop until tests pass or are judged unsolvable."""
         _run_repair(
@@ -477,6 +501,7 @@ def build_cli() -> click.Group:
             dry_run_agents=dry_run_agents,
             dry_run=dry_run,
             start_runtime=start_runtime,
+            failed_only=failed_only,
         )
 
     # ── agents ──────────────────────────────────────────────────────────────
@@ -629,7 +654,7 @@ def build_cli() -> click.Group:
             discover_inventory(config)
         ensure_state_layout(config)
         backend = _prepare_backend(config)
-        conn = ensure_database(database_path(config))
+        conn = ensure_database(database_path(config), project_id=config.project_id)
         try:
             loop = FixLoop(
                 config,
@@ -645,12 +670,7 @@ def build_cli() -> click.Group:
             raise click.ClickException(str(exc)) from exc
         finally:
             conn.close()
-        _print_summary(summary)
-        if summary.all_green:
-            click.echo("VERIFY: clean ✅")
-            raise SystemExit(0)
-        click.echo("VERIFY: not clean ❌")
-        raise SystemExit(1)
+        _exit_from_summary(summary, verify=True)
 
     # ── cleanup ──────────────────────────────────────────────────────────────
     @cli.command()
@@ -663,10 +683,17 @@ def build_cli() -> click.Group:
         is_flag=True,
         help="Also delete per-attempt work/run artifacts (destructive).",
     )
+    @click.option(
+        "--stale-runs",
+        is_flag=True,
+        help="Mark orphaned running repair runs as stopped when their master PID "
+        "is gone.",
+    )
     def cleanup(
         project_root: Path,
         dry_run: bool,
         purge_artifacts: bool,
+        stale_runs: bool,
     ) -> None:
         """Drop kept isolation databases and (optionally) purge artifacts.
 
@@ -677,6 +704,26 @@ def build_cli() -> click.Group:
         """
 
         config = _load(project_root)
+        if stale_runs:
+            from .repair.stale_runs import reconcile_stale_runs
+
+            conn = ensure_database(
+                database_path(config),
+                reconcile_stale_runs=False,
+            )
+            try:
+                result = reconcile_stale_runs(
+                    conn,
+                    project_id=config.project_id,
+                    dry_run=dry_run,
+                )
+            finally:
+                conn.close()
+            verb = "Would stop" if dry_run else "Stopped"
+            click.echo(f"{verb} {len(result.stopped_run_ids)} stale run(s).")
+            for run_id in result.stopped_run_ids:
+                click.echo(f"  {run_id}")
+
         dropped, failed = _cleanup_databases(config, dry_run=dry_run)
         verb = "Would drop" if dry_run else "Dropped"
         click.echo(f"{verb} {dropped} kept database(s).")
@@ -792,6 +839,13 @@ def build_cli() -> click.Group:
                 "non-loopback hosts.",
                 err=True,
             )
+
+        if resolved_db.is_file():
+            conn = ensure_database(
+                resolved_db,
+                project_id=project_id or None,
+            )
+            conn.close()
 
         try:
             app, _store, _procs, _info = build_monitor(

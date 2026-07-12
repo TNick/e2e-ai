@@ -49,6 +49,16 @@ def write_prompt_file(prompt: str) -> Path:
     return path
 
 
+def write_schema_file(schema: dict[str, object]) -> Path:
+    """Write a JSON Schema dict to a temporary file for CLI ``--output-schema``."""
+
+    fd, name = tempfile.mkstemp(prefix="e2e-ai-schema-", suffix=".json")
+    os.close(fd)
+    path = Path(name)
+    path.write_text(schema_json(schema), encoding="utf-8")
+    return path
+
+
 def invoke_argv(
     agent_id: str,
     argv: Sequence[str],
@@ -64,6 +74,7 @@ def invoke_argv(
     mcp_version: str | None = None,
     tools_allow: Sequence[str] | None = None,
     tools_deny: Sequence[str] | None = None,
+    cleanup_paths: Sequence[Path] | None = None,
 ) -> AgentResult:
     """Run one argv list and return a normalized :class:`AgentResult`."""
 
@@ -98,17 +109,22 @@ def invoke_argv(
 
     stdout_path = output_path or (cwd / ".e2e-ai-agent-stdout.log")
     stderr_path = stdout_path
-    exit_code = run_agent_command(
-        command,
-        cwd=cwd,
-        env=run_env,
-        stdin_data=stdin_data,
-        stdout_path=stdout_path,
-        stderr_path=stderr_path,
-        timeout_seconds=timeout_seconds,
-    )
-    if tmp_file is not None:
-        tmp_file.unlink(missing_ok=True)
+    try:
+        exit_code = run_agent_command(
+            command,
+            cwd=cwd,
+            env=run_env,
+            stdin_data=stdin_data,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            timeout_seconds=timeout_seconds,
+        )
+    finally:
+        if tmp_file is not None:
+            tmp_file.unlink(missing_ok=True)
+        if cleanup_paths is not None:
+            for path in cleanup_paths:
+                path.unlink(missing_ok=True)
 
     text = ""
     if stdout_path.is_file():

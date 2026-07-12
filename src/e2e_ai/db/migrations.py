@@ -11,7 +11,7 @@ from .connection import open_database, transaction
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 _MIGRATIONS: dict[int, tuple[str, ...]] = {
@@ -22,6 +22,7 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE agent_invocations ADD COLUMN failover_retry INTEGER "
         "NOT NULL DEFAULT 0",
     ),
+    3: ("ALTER TABLE runs ADD COLUMN pid INTEGER",),
 }
 
 
@@ -70,7 +71,12 @@ def _apply_migrations(conn: sqlite3.Connection, from_version: int) -> None:
         logger.log(1, "applied schema migration version %d", version)
 
 
-def ensure_database(path: Path) -> sqlite3.Connection:
+def ensure_database(
+    path: Path,
+    *,
+    reconcile_stale_runs: bool = True,
+    project_id: str | None = None,
+) -> sqlite3.Connection:
     """Create or migrate the state database."""
 
     conn = open_database(path)
@@ -85,4 +91,8 @@ def ensure_database(path: Path) -> sqlite3.Connection:
                 raise RuntimeError(
                     f"unsupported schema version {version}; expected {SCHEMA_VERSION}"
                 )
+    if reconcile_stale_runs:
+        from ..repair.stale_runs import reconcile_stale_runs as _reconcile_stale_runs
+
+        _reconcile_stale_runs(conn, project_id=project_id)
     return conn

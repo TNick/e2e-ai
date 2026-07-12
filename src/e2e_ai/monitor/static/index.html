@@ -202,6 +202,12 @@ const DESCRIPTIONS = {
       <dt>Spec</dt><dd>Playwright spec file the test lives in.</dd>
       <dt>Title</dt><dd>Full test title (describe › test); the link opens details.</dd>
       <dt>Project</dt><dd>Playwright project / browser (e.g. chromium).</dd>
+      <dt>Runs</dt><dd>Total recorded executions for this test. When there are
+        stored failure packets, the failure count is shown in parentheses
+        (e.g. <span class="val">5 (2)</span>).</dd>
+      <dt>Agents</dt><dd>On non-passing attempts, links to the planner /
+        implementer / instrumenter invocations for that run (what was tried).
+        The <b>Agent invocations</b> section lists the full history.</dd>
       <dt>Flags</dt><dd><span class="val">excluded</span> (matched an exclude
         pattern, never scheduled) and/or <span class="val">stale</span> (no
         longer present in the latest discovery).</dd>
@@ -235,8 +241,12 @@ const DESCRIPTIONS = {
         retried the same role with the next configured provider.</dd>
       <dt>Switch reason</dt><dd>Why the previous provider was abandoned, when
         failover rotated to this one.</dd>
+      <dt>Test</dt><dd>Test the invocation was working on (when known).</dd>
+      <dt>Id</dt><dd>Invocation id; the link opens the repair plan, implementation
+        log, or other agent output.</dd>
     </dl>
-    <p class="muted">Use the Status filter to isolate failed invocations.</p>`,
+    <p class="muted">Use the Status filter to isolate failed invocations. Click an
+      Id to read the planner&apos;s repair plan or the implementer log.</p>`,
   settings: `<p><b>Settings</b> — how this monitor is connected and, optionally,
     the full effective configuration.</p>
     <dl>
@@ -282,7 +292,12 @@ function renderNav() {
 // address bar updates and browser back/forward + deep links work.
 function navigate(view) {
   if (!VIEWS[view]) return;
-  if (location.hash.slice(1) === view) { render(); return; }
+  dismissDrawer();
+  if (location.hash.slice(1) === view) {
+    state.view = view;
+    render();
+    return;
+  }
   location.hash = view;  // triggers the hashchange handler below
 }
 function viewFromHash() {
@@ -291,7 +306,11 @@ function viewFromHash() {
 }
 window.addEventListener("hashchange", () => {
   const v = viewFromHash();
-  if (v !== state.view) { state.view = v; render(); }
+  if (v !== state.view) {
+    dismissDrawer();
+    state.view = v;
+    render();
+  }
 });
 
 async function viewActive(el) {
@@ -320,6 +339,12 @@ function shardCard(s) {
   </div>`;
 }
 const link = (u) => `<a href="${esc(u)}" target="_blank">${esc(u)}</a>`;
+const runSummary = (x) => {
+  const runs = Number(x.run_count ?? 0);
+  const failures = Number(x.failure_count ?? 0);
+  if (!runs) return "0";
+  return failures ? `${runs} (${failures})` : String(runs);
+};
 
 async function viewRuns(el) {
   const runs = await api("/runs?limit=100");
@@ -348,7 +373,7 @@ async function showRun(id) {
     <div class="muted">${esc(r.status)} · ${local(r.started_at)} → ${local(r.finished_at)}</div>
     <h3>Attempts</h3>${attempts}
     <h3>Agent invocations</h3>${r.agents.length ? r.agents.map((g) =>
-      `<div>· ${esc(g.role)} → ${esc(g.agent_id)} <span class="${scls(g.status)}">${esc(g.status)}</span></div>`).join("")
+      `<div>· <a data-agent="${esc(g.id)}">${esc(g.role)}</a> → ${esc(g.agent_id)} <span class="${scls(g.status)}">${esc(g.status)}</span></div>`).join("")
       : '<div class="muted">none</div>'}
     <h3>Failures</h3>${r.failures.map((f) =>
       `<div>· <a data-fail="${esc(f.id)}">${esc(f.signature)}</a> ${esc((f.error_message||"").split("\n")[0])}</div>`).join("") || '<div class="muted">none</div>'}`);
@@ -362,6 +387,8 @@ async function viewTests(el) {
     { label: "Spec", type: "str", val: (x) => x.spec_file, cls: () => "muted" },
     { label: "Title", type: "str", val: (x) => x.title, cell: (x) => `<a data-test="${esc(x.id)}">${esc(x.title)}</a>` },
     { label: "Project", type: "str", val: (x) => x.project_name || "" },
+    { label: "Runs", type: "num", val: (x) => Number(x.run_count || 0), cell: runSummary,
+      cls: (x) => Number(x.failure_count || 0) ? "s-failing" : "muted" },
     { label: "Flags", type: "str", val: flags, cls: () => "muted" },
   ], t.items, { filter: { label: "Status", val: (x) => x.last_status || "unknown" } });
   el.innerHTML = pageHeader("tests", `Tests (${t.items.length})`, DESCRIPTIONS.tests) + table;
@@ -369,15 +396,36 @@ async function viewTests(el) {
 async function showTest(id) {
   state.drawerRender = () => showTest(id);
   const t = await api("/tests/" + encodeURIComponent(id));
+  const runLabel = runSummary(t);
+  const agentsByRun = {};
+  for (const g of t.agents || []) {
+    (agentsByRun[g.run_id] ||= []).push(g);
+  }
+  const attemptAgents = (a) => {
+    if (a.status === "passed") return "";
+    const agents = agentsByRun[a.run_id] || [];
+    if (!agents.length) return '<span class="muted">—</span>';
+    return agents.map((g) =>
+      `<a data-agent="${esc(g.id)}" title="View ${esc(g.role)} output">${esc(g.role)}</a>`,
+    ).join(" · ");
+  };
   const attempts = renderTable("test-attempts", [
     { label: "Started", type: "date", val: (a) => a.started_at, cell: (a) => local(a.started_at) },
     { label: "#", type: "num", val: (a) => a.attempt_index },
     { label: "Status", type: "str", val: (a) => a.status, cls: (a) => scls(a.status) },
     { label: "Exit", type: "num", val: (a) => a.exit_code },
+    { label: "Agents", type: "str", val: attemptAgents, cell: attemptAgents },
   ], t.attempts);
+  const agentsSection = t.agents?.length
+    ? `<h3>Agent invocations</h3>${t.agents.map((g) =>
+      `<div>· <a data-agent="${esc(g.id)}">${esc(g.role)}</a> → ${esc(g.agent_id)} `
+      + `<span class="${scls(g.status)}">${esc(g.status)}</span> · ${local(g.started_at)}`
+      + ` · <a data-run="${esc(g.run_id)}" class="muted">run</a></div>`).join("")}`
+    : "";
   openDrawer(esc(t.title),
-    `<div class="muted">${esc(t.spec_file)} · ${esc(t.last_status||"unknown")}</div>
-     <h3>Attempts</h3>${attempts}`);
+    `<div class="muted">${esc(t.spec_file)} · ${esc(t.last_status||"unknown")} · Runs ${esc(runLabel)}</div>
+     <h3>Attempts</h3>${attempts}${agentsSection}`);
+  render(false);
 }
 
 async function viewFailures(el) {
@@ -414,13 +462,62 @@ async function viewAgents(el) {
     { label: "Finished", type: "date", val: (x) => x.finished_at, cell: (x) => local(x.finished_at) },
     { label: "Role", type: "str", val: (x) => x.role },
     { label: "Agent", type: "str", val: (x) => x.agent_id },
+    { label: "Test", type: "str", val: (x) => x.test_title || "", cell: (x) => x.test_id
+      ? `<a data-test="${esc(x.test_id)}">${esc(x.test_title || x.test_id)}</a>` : "" },
     { label: "Status", type: "str", val: (x) => x.status, cls: (x) => scls(x.status) },
     { label: "Exit", type: "num", val: (x) => x.exit_code },
     { label: "Exit class", type: "str", val: (x) => x.exit_class || "" },
     { label: "Failover", type: "str", val: (x) => x.failover_retry ? "yes" : "" },
     { label: "Switch reason", type: "str", val: (x) => x.switch_reason || "" },
+    { label: "Id", type: "str", val: (x) => x.id, cell: (x) => `<a data-agent="${esc(x.id)}">${esc(x.id)}</a>` },
   ], g.items, { filter: { label: "Status", val: (x) => x.status } });
   el.innerHTML = pageHeader("agents", "Agent invocations", DESCRIPTIONS.agents) + table;
+}
+async function showAgent(id) {
+  state.drawerRender = () => showAgent(id);
+  const a = await api("/agents/" + encodeURIComponent(id));
+  const meta = [
+    `<span class="${scls(a.status)}">${esc(a.status)}</span>`,
+    a.exit_code != null ? `exit ${esc(a.exit_code)}` : "",
+    a.exit_class ? esc(a.exit_class) : "",
+    local(a.started_at) + (a.finished_at ? " → " + local(a.finished_at) : ""),
+  ].filter(Boolean).join(" · ");
+  let body = `<div class="muted">${meta}</div>`;
+  if (a.test) {
+    body += `<div style="margin-top:6px">Test: <a data-test="${esc(a.test.id)}">${esc(a.test.title || a.test.id)}</a>`
+      + (a.test.spec_file ? ` <span class="muted">${esc(a.test.spec_file)}</span>` : "")
+      + ` · Run: <a data-run="${esc(a.run_id)}">${esc(a.run_id)}</a></div>`;
+  }
+  if (a.repair_plan) {
+    body += `<h3>Repair plan</h3><pre>${esc(a.repair_plan.plan_text)}</pre>`;
+    if (a.repair_plan.outcome) {
+      body += `<div class="muted">Outcome: ${esc(a.repair_plan.outcome)}</div>`;
+    }
+  }
+  const planText = (a.repair_plan && a.repair_plan.plan_text || "").trim();
+  const stdoutText = (a.stdout || "").trim();
+  const showLog = stdoutText && stdoutText !== planText;
+  const logLabel = a.role === "implementer" ? "Implementation log"
+    : a.role === "instrumenter" ? "Instrumentation plan"
+    : showLog ? "Agent log" : "";
+  if (showLog && logLabel) body += `<h3>${logLabel}</h3><pre>${esc(a.stdout)}</pre>`;
+  else if (!a.repair_plan && stdoutText) {
+    body += `<h3>${logLabel || "Output"}</h3><pre>${esc(a.stdout)}</pre>`;
+  }
+  if (a.stderr) body += `<h3>Stderr</h3><pre>${esc(a.stderr)}</pre>`;
+  if (!a.repair_plan && !stdoutText && !a.stderr) {
+    body += '<div class="muted" style="margin-top:8px">No output recorded.</div>';
+  }
+  if (a.command) {
+    body += `<h3>Command</h3><pre>${esc(JSON.stringify(a.command, null, 2))}</pre>`;
+  }
+  if (a.provider_order && a.provider_order.length) {
+    body += `<div class="muted">Provider order: ${esc(a.provider_order.join(" → "))}</div>`;
+  }
+  if (a.stdout_path) {
+    body += `<div class="muted">Log: <span class="copy" data-copy="${esc(a.stdout_path)}">${esc(a.stdout_path)} ⧉</span></div>`;
+  }
+  openDrawer(`${esc(a.role)} · ${esc(a.agent_id)}`, body);
 }
 
 // ── Commands + options forms ────────────────────────────────────────────────
@@ -558,10 +655,14 @@ function openDrawer(title, html) {
   d.innerHTML = `<div class="row-flex"><h2 style="flex:1">${title}</h2>
     <button class="secondary" onclick="closeDrawer()">Close</button></div>${html}`;
 }
-function closeDrawer() {
-  const d = document.getElementById("drawer"); if (d) d.remove();
+function dismissDrawer() {
+  const d = document.getElementById("drawer");
+  if (d) d.remove();
   clearInterval(outTimer);
   state.drawerRender = null;
+}
+function closeDrawer() {
+  dismissDrawer();
   render(false);  // refresh the underlying view (e.g. show the new command run)
 }
 
@@ -589,7 +690,7 @@ document.addEventListener("click", (e) => {
     info.classList.toggle("rotated", state.descOpen[v]);
     return;
   }
-  const a = e.target.closest("[data-run],[data-test],[data-fail],[data-out],[data-cmd],[data-copy]");
+  const a = e.target.closest("[data-run],[data-test],[data-fail],[data-out],[data-cmd],[data-copy],[data-agent]");
   if (!a) return;
   const d = a.dataset;
   if (d.run !== undefined) showRun(d.run);
@@ -597,6 +698,7 @@ document.addEventListener("click", (e) => {
   else if (d.fail !== undefined) showFailure(d.fail);
   else if (d.out !== undefined) showOutput(d.out);
   else if (d.cmd !== undefined) openOptions(d.cmd);
+  else if (d.agent !== undefined) showAgent(d.agent);
   else if (d.copy !== undefined) navigator.clipboard?.writeText(d.copy);
 });
 document.addEventListener("change", (e) => {
@@ -624,7 +726,6 @@ async function render(showLoading = true) {
 // dashboard does not flicker every second. Commands is refreshed whenever a
 // monitor-launched command is still running (its status lives outside SQLite).
 async function tick() {
-  if (document.getElementById("drawer")) return;
   let rev;
   try { rev = (await api("/summary")).revision; } catch { return; }
   let live = false;
@@ -635,6 +736,7 @@ async function tick() {
   if (rev === state.rev && !live) return;
   state.rev = rev;
   render(false);
+  if (document.getElementById("drawer") && state.drawerRender) state.drawerRender();
 }
 
 async function boot() {

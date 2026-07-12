@@ -39,6 +39,8 @@ class TestSchema:
             }
             columns = {row[1] for row in conn.execute("PRAGMA table_info(tests)")}
             assert "is_stale" in columns
+            run_columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+            assert "pid" in run_columns
         finally:
             conn.close()
 

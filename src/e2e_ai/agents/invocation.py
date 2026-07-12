@@ -76,11 +76,14 @@ def run_agent_command(
             stderr_handle = stderr_path.open("wb")
             stderr_target = stderr_handle
         try:
+            stdin_target = (
+                subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL
+            )
             process = subprocess.Popen(
                 list(argv),
                 cwd=str(cwd),
                 env=dict(env),
-                stdin=subprocess.PIPE if stdin_data else None,
+                stdin=stdin_target,
                 stdout=stdout_handle,
                 stderr=stderr_target,
             )

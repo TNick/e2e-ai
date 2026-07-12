@@ -250,6 +250,71 @@ class TestApi:
         assert data["agents"][0]["agent_id"] == "codex"
         assert data["failures"][0]["signature"] == "sig"
 
+    def test_agent_detail_includes_plan_and_log(self, tmp_path):
+        client, _ = _client(tmp_path)
+        log_path = tmp_path / "planner.log"
+        log_path.write_text(
+            "1. Fix the login button\n2. Re-run the test\n", encoding="utf-8"
+        )
+        db = tmp_path / "state.sqlite3"
+        conn = ensure_database(db)
+        conn.execute(
+            "UPDATE agent_invocations SET role = ?, stdout_path = ? WHERE id = ?",
+            ("planner", str(log_path), "ai1"),
+        )
+        conn.execute(
+            "INSERT INTO repair_plans ("
+            "id, test_id, failure_packet_id, agent_id, plan_text, "
+            "result_json, created_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "plan1",
+                "t1",
+                "fp1",
+                "codex",
+                "1. Fix the login button\n2. Re-run the test",
+                json.dumps({"outcome": "failed"}),
+                _now(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        listed = client.get("/api/agents").json()["items"]
+        assert listed[0]["test_title"] == "logs in"
+
+        detail = client.get("/api/agents/ai1").json()
+        assert detail["role"] == "planner"
+        assert detail["repair_plan"]["plan_text"].startswith("1. Fix the login")
+        assert detail["repair_plan"]["outcome"] == "failed"
+        assert "Fix the login button" in detail["stdout"]
+        assert detail["test"]["title"] == "logs in"
+
+    def test_agent_detail_missing_returns_404(self, tmp_path):
+        client, _ = _client(tmp_path)
+        assert client.get("/api/agents/missing").status_code == 404
+
+    def test_list_tests_includes_run_and_failure_counts(self, tmp_path):
+        client, _ = _client(tmp_path)
+        items = client.get("/api/tests").json()["items"]
+        test = next(item for item in items if item["id"] == "t1")
+        assert test["run_count"] == 3
+        assert test["failure_count"] == 1
+
+    def test_test_detail_includes_run_and_failure_counts(self, tmp_path):
+        client, _ = _client(tmp_path)
+        detail = client.get("/api/tests/t1").json()
+        assert detail["run_count"] == 3
+        assert detail["failure_count"] == 1
+        assert len(detail["attempts"]) == 3
+
+    def test_test_detail_includes_agent_invocations(self, tmp_path):
+        client, _ = _client(tmp_path)
+        detail = client.get("/api/tests/t1").json()
+        assert len(detail["agents"]) == 1
+        assert detail["agents"][0]["id"] == "ai1"
+        assert detail["agents"][0]["role"] == "planner"
+
     def test_commands_endpoint(self, tmp_path):
         client, _ = _client(tmp_path)
         ids = {c["id"] for c in client.get("/api/commands").json()["items"]}

@@ -116,8 +116,8 @@ def build_plan_prompt(
         Latest failure:
         {_failure_block(failure)}
 
-        Earlier failures for THIS test (most recent first — a regression here
-        means it passed before, so prefer a fix that respects that history):
+        Earlier failures for THIS test (most recent first — if it has passed
+        before, prefer a fix that respects that history):
         {_previous_failures_block(previous_failures)}
 
         Previous plans already tried for this test (they did NOT fix it — do not

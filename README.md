@@ -62,7 +62,7 @@ e2e-ai repair               # run the AI fix loop until green
 | `e2e-ai run --test-id <id>` | Run a single test by id (no agents). |
 | `e2e-ai repair` | Run the full plan → implement → rerun fix loop. |
 | `e2e-ai verify` | The clean gate: run the suite once (or parse existing reports) and pass only when clean. |
-| `e2e-ai cleanup` | Drop kept isolation databases and (optionally) purge artifacts. |
+| `e2e-ai cleanup` | Drop kept isolation databases, reconcile stale runs, and (optionally) purge artifacts. |
 | `e2e-ai agents list` | List configured plugins and role assignments. |
 | `e2e-ai agents doctor` | Check that the agents this project uses are logged in. |
 | `e2e-ai db template` | Create/refresh the pristine Postgres template database. |
@@ -175,6 +175,10 @@ repair options are available either way.
   invoke the agent CLIs (no tokens spent). Useful for inspecting what the loop
   would send.
 - `--dry-run` — alias for `--dry-run-agents`.
+- `--failed-only` — repair only tests that did not pass in the most recent
+  finished run with recorded attempts (for example after `e2e-ai run --all`).
+  Tests that were not part of that run are skipped. When every test passed in
+  the previous run, repair exits successfully without scheduling anything.
 - `--start-runtime` / `--no-start-runtime` — start the target Docker support
   stack before running (default: `--start-runtime`).
 
@@ -209,8 +213,17 @@ Reclaim resources left by kept environments. Databases retained for debugging
 recorded database. By default it leaves per-attempt artifacts in place (so kept
 evidence is not lost). Always exits `0`.
 
+Repair, run, verify, and ui also reconcile stale runs automatically on
+startup: any run still marked `running` whose master PID is missing or no longer
+alive is marked `stopped` with reason `process interrupted`, and open attempts
+for that run are marked `interrupted`. Pressing Ctrl+C during an active repair
+or run loop marks the current run the same way before exiting with code `130`.
+
 - `--project-root DIRECTORY` — project root (default `.`).
 - `--dry-run` — list what would be dropped/removed without changing anything.
+- `--stale-runs` — mark orphaned `running` repair runs as stopped when their
+  master process no longer exists (also runs automatically when opening the
+  state database for repair/run/verify/discover/ui).
 - `--purge-artifacts` — also delete the per-attempt `work/` and `runs/`
   directories under the state dir. Destructive — this removes logs, reports, and
   agent transcripts.

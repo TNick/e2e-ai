@@ -36,6 +36,7 @@ CREATE TABLE runs (
     finished_at TEXT,
     status TEXT NOT NULL,
     reason TEXT,
+    pid INTEGER,
     FOREIGN KEY(project_id) REFERENCES projects(id)
 );
 

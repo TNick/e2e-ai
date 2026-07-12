@@ -99,17 +99,25 @@ def should_stop_test(
     conn: sqlite3.Connection,
     test_id: str,
     max_attempts: int,
+    *,
+    run_id: str | None = None,
 ) -> bool:
     """Return whether the test exhausted local repair attempts."""
 
     if max_attempts <= 0:
         return False
+    run_filter = ""
+    params: tuple[object, ...] = (test_id,)
+    if run_id is not None:
+        run_filter = " AND run_id = ?"
+        params = (test_id, run_id)
     row = conn.execute(
-        """
+        f"""
         SELECT COUNT(*) FROM attempts
         WHERE test_id = ? AND status != 'passed'
+        {run_filter}
         """,
-        (test_id,),
+        params,
     ).fetchone()
     failed_runs = int(row[0]) if row is not None else 0
     return failed_runs >= max_attempts

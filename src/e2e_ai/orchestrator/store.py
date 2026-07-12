@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import UTC, datetime
@@ -24,10 +25,10 @@ def create_repair_run(conn: sqlite3.Connection, config: EffectiveConfig) -> str:
     run_id = _new_id("run")
     conn.execute(
         """
-        INSERT INTO runs (id, project_id, started_at, status, reason)
-        VALUES (?, ?, ?, 'running', NULL)
+        INSERT INTO runs (id, project_id, started_at, status, reason, pid)
+        VALUES (?, ?, ?, 'running', NULL, ?)
         """,
-        (run_id, config.project_id, _now()),
+        (run_id, config.project_id, _now(), os.getpid()),
     )
     conn.commit()
     return run_id
@@ -141,3 +142,28 @@ def has_ever_passed(conn: sqlite3.Connection, test_id: str) -> bool:
         (test_id,),
     ).fetchone()
     return row is not None
+
+
+def attempt_history_counts(conn: sqlite3.Connection, test_id: str) -> tuple[int, int]:
+    """Return prior attempt and failure-packet counts for one test."""
+
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(a.id) AS run_count,
+            COUNT(fp.id) AS failure_count
+        FROM attempts a
+        LEFT JOIN failure_packets fp ON fp.attempt_id = a.id
+        WHERE a.test_id = ?
+        """,
+        (test_id,),
+    ).fetchone()
+    if row is None:
+        return 0, 0
+    return int(row["run_count"]), int(row["failure_count"])
+
+
+def format_test_history_suffix(run_count: int, failure_count: int) -> str:
+    """Format console history for tests with prior attempts."""
+
+    return f" ({run_count} runs, {failure_count} failures)"
