@@ -195,6 +195,78 @@ def _test_report_from_state(
     )
 
 
+def _run_shard_coverage(
+    *,
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    catalog: list[DiscoveredTest],
+    run_id: str,
+    backend: IsolationBackend,
+    plugins: Mapping[str, AgentPlugin],
+    registry: AgentRegistry,
+    say: Reporter,
+    dry_run_agents: bool,
+    runtime_env: Mapping[str, str] | None,
+    min_tests_per_slot: int,
+    summary: LoopSummary,
+) -> tuple[bool, str | None]:
+    """Run tests until each fr-two slot has at least ``min_tests_per_slot`` passes."""
+
+    from ..integrations.fr_two.config import fr_two_isolation_section
+    from ..integrations.fr_two.isolation import (
+        build_fr_two_slots,
+        pick_test_for_undercovered_slots,
+        slot_for_test,
+    )
+
+    slots = build_fr_two_slots(
+        fr_two_isolation_section(config),
+        config.project_root,
+    )
+    slot_pass_counts = {slot.id: 0 for slot in slots}
+    executed_ids: set[str] = set()
+
+    while any(count < min_tests_per_slot for count in slot_pass_counts.values()):
+        needy = {
+            slot_id
+            for slot_id, count in slot_pass_counts.items()
+            if count < min_tests_per_slot
+        }
+        test = pick_test_for_undercovered_slots(
+            catalog,
+            slots,
+            needy,
+            prefer_unrun=executed_ids,
+        )
+        if test is None:
+            return True, f"could not schedule passing tests for slots: {sorted(needy)}"
+
+        state = run_one_test_until_resolved(
+            conn=conn,
+            config=config,
+            test=test,
+            run_id=run_id,
+            isolation=backend,
+            agents=plugins,
+            registry=registry,
+            reporter=say,
+            dry_run_agents=dry_run_agents,
+            runtime_env=runtime_env,
+        )
+        executed_ids.add(test.id)
+        summary.reports.append(_test_report_from_state(test, state))
+
+        if state.state == STATE_PASSED:
+            slot_id = slot_for_test(slots, test.id).id
+            slot_pass_counts[slot_id] += 1
+            continue
+        if state.state == STATE_EXTERNAL_BLOCKER:
+            return True, state.note
+        return True, f"shard coverage requires passing tests; failed: {test.id}"
+
+    return False, None
+
+
 def execute_attempt(
     *,
     conn: sqlite3.Connection,
@@ -702,6 +774,7 @@ def run_repair_loop(
     dry_run_agents: bool = False,
     stop_on_failure: bool = False,
     start_runtime: bool = True,
+    min_tests_per_slot: int | None = None,
 ) -> LoopSummary:
     """Run tests until green or blocked."""
 
@@ -713,10 +786,12 @@ def run_repair_loop(
         path.mkdir(parents=True, exist_ok=True)
 
     pending = list_runnable_tests(conn, config.project_id)
+    catalog = list(pending)
     if test_ids is not None:
         wanted = set(test_ids)
         pending = [t for t in pending if t.id in wanted]
-    if limit is not None:
+        catalog = list(pending)
+    if limit is not None and min_tests_per_slot is None:
         pending = pending[:limit]
 
     summary = LoopSummary()
@@ -725,7 +800,13 @@ def run_repair_loop(
     stopped = False
     stop_reason: str | None = None
 
-    say(f"Scheduling {len(pending)} test(s).")
+    if min_tests_per_slot is not None:
+        say(
+            f"Scheduling shard coverage: at least {min_tests_per_slot} passing "
+            f"test(s) per slot."
+        )
+    else:
+        say(f"Scheduling {len(pending)} test(s).")
     context = _isolation_context(config)
 
     def _runtime_outcome() -> str:
@@ -741,30 +822,46 @@ def run_repair_loop(
             runtime_env = runtime_env_for_playwright(runtime_state)
             context = _isolation_context(config, extra_env=runtime_env)
             backend.prepare_baseline(context)
-            for test in pending:
-                state = run_one_test_until_resolved(
+            if min_tests_per_slot is not None:
+                stopped, stop_reason = _run_shard_coverage(
                     conn=conn,
                     config=config,
-                    test=test,
+                    catalog=catalog,
                     run_id=run_id,
-                    isolation=backend,
-                    agents=plugins,
+                    backend=backend,
+                    plugins=plugins,
                     registry=registry,
-                    reporter=say,
+                    say=say,
                     dry_run_agents=dry_run_agents,
                     runtime_env=runtime_env,
+                    min_tests_per_slot=min_tests_per_slot,
+                    summary=summary,
                 )
-                summary.reports.append(_test_report_from_state(test, state))
+            else:
+                for test in pending:
+                    state = run_one_test_until_resolved(
+                        conn=conn,
+                        config=config,
+                        test=test,
+                        run_id=run_id,
+                        isolation=backend,
+                        agents=plugins,
+                        registry=registry,
+                        reporter=say,
+                        dry_run_agents=dry_run_agents,
+                        runtime_env=runtime_env,
+                    )
+                    summary.reports.append(_test_report_from_state(test, state))
 
-                if state.state == STATE_EXTERNAL_BLOCKER:
-                    if config.repair_policy.stop_on_first_unsolvable:
+                    if state.state == STATE_EXTERNAL_BLOCKER:
+                        if config.repair_policy.stop_on_first_unsolvable:
+                            stopped = True
+                            stop_reason = state.note
+                            break
+                    if stop_on_failure and state.state != STATE_PASSED:
                         stopped = True
-                        stop_reason = state.note
+                        stop_reason = "stop on failure"
                         break
-                if stop_on_failure and state.state != STATE_PASSED:
-                    stopped = True
-                    stop_reason = "stop on failure"
-                    break
     finally:
         if stopped:
             status = "stopped"
@@ -830,6 +927,7 @@ class FixLoop:
         test_ids: list[str] | None = None,
         stop_on_failure: bool = False,
         start_runtime: bool = True,
+        min_tests_per_slot: int | None = None,
     ) -> LoopSummary:
         return run_repair_loop(
             self.config,
@@ -842,6 +940,7 @@ class FixLoop:
             dry_run_agents=self.dry_run,
             stop_on_failure=stop_on_failure,
             start_runtime=start_runtime,
+            min_tests_per_slot=min_tests_per_slot,
         )
 
 

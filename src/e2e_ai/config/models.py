@@ -132,6 +132,20 @@ class FullVerificationConfig:
 
 
 @define
+class MonitorConfig:
+    """Defaults for the ``e2e-ai ui`` local web monitor.
+
+    CLI flags (``--host`` / ``--port`` / ``--refresh-ms`` / ``--open``) override
+    these when passed.
+    """
+
+    host: str = field(default="127.0.0.1")
+    port: int = field(default=8765)
+    refresh_ms: int = field(default=1000)
+    open_browser: bool = field(default=False)
+
+
+@define
 class TargetSurfaceConfig:
     """One editable or reference surface within the project."""
 
@@ -248,6 +262,7 @@ class ProjectConfig:
     playwright_mcp: PlaywrightMcpConfig = field(factory=_default_playwright_mcp)
     target: TargetConfig = field(factory=default_target_config)
     target_runtime: TargetRuntimeConfig = field(factory=TargetRuntimeConfig)
+    monitor: MonitorConfig = field(factory=MonitorConfig)
 
 
 @define
@@ -275,5 +290,6 @@ class EffectiveConfig:
     playwright_mcp: PlaywrightMcpConfig = field(factory=_default_playwright_mcp)
     target: TargetConfig = field(factory=default_target_config)
     target_runtime: TargetRuntimeConfig = field(factory=TargetRuntimeConfig)
+    monitor: MonitorConfig = field(factory=MonitorConfig)
     project_config_path: Path | None = field(default=None)
     user_config_path: Path | None = field(default=None)

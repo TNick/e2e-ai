@@ -6,6 +6,33 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `monitor:` project config section (`host`, `port`, `refresh_ms`, `open`) that
+  supplies the defaults for `e2e-ai ui`; the CLI flags override it. Added to the
+  fr-two `e2e-ai.yml`.
+
+### Fixed
+
+- Monitor dashboard no longer flickers every second: auto-refresh is gated on the
+  state revision and skips the loading placeholder, so an idle view stays put.
+- Launching a command from the monitor now transitions the open drawer straight
+  to the command output, instead of briefly flashing the Commands page first.
+- Monitor navigation now uses hash routing, so the browser address bar reflects
+  the current page (`#active`, `#runs`, …) and back/forward and deep links work.
+- Monitor tables are click-to-sort on any column (date/date-time columns sort by
+  underlying value, not the displayed string), and Runs, Tests, and Agents add a
+  status filter. Sort/filter choices persist across live refreshes.
+- Broke an `isolation → integrations.fr_two → isolation` import cycle by loading
+  the fr-two isolation backend lazily in the isolation registry.
+
+- `e2e-ai ui` — a local, read-only web monitor (optional `monitor` extra:
+  FastAPI/uvicorn). Browses runs/tests/attempts/failures/plans/agents from the
+  read-only SQLite state database, infers live activity per shard/runner/
+  environment, and launches allowlisted `e2e-ai` commands through validated
+  argv (never a shell). New `e2e_ai.monitor` package (store, command registry,
+  process launcher, FastAPI API, server) plus a bundled no-build static UI, so
+  installed users need no Node.js at runtime. Options: `--host`, `--port`,
+  `--refresh-ms`, `--db`, `--open`, `--project-root`.
+
 - GitHub Actions publish workflow for PyPI releases, with a release-version
   guard that blocks publishing when the Git tag does not match
   `pyproject.toml`.
@@ -15,6 +42,10 @@ All notable changes to this project will be documented in this file.
   Playwright. Runtime logs live under `.e2e-ai/runs/<run-id>/runtime/`.
 - fr-two `target_runtime` defaults and validation in the fr-two adapter; fr-two
   `e2e-ai.yml` declares the Docker lab stack startup contract.
+- fr-two sequential runs use `shared_app_stack` so all slots target the single
+  lab stack on `:8080`/`:8000` while keeping slot ids for storage isolation.
+- `e2e-ai run --shard-min-tests N` runs until each fr-two slot has at least N
+  passing tests.
 - `e2e-ai verify` — the clean gate. Runs the full runnable suite once (no agents)
   and passes only when all tests are green, or with `--report <file|dir>` parses
   existing Playwright JSON reports (including sharded runs) and gates on them
@@ -31,6 +62,10 @@ All notable changes to this project will be documented in this file.
   slot id + stable database name in connection errors.
 
 ### Fixed
+
+- fr-two slot leases export `E2E_DATABASE_URL` with the Docker lab Postgres
+  password so Playwright DB helpers (for example lab-directory login throttle
+  cleanup) authenticate instead of failing with SCRAM errors.
 
 - Wire the `fr_two` isolation backend into the factory so `e2e-ai run` and
   `repair` can lease stable fr-two execution slots instead of failing with

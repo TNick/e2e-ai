@@ -116,6 +116,11 @@ def default_fr_two_config() -> dict[str, Any]:
                 "count": 4,
                 "database_prefix": "frtwo_e2e_slot",
                 "database_user": "frtwo",
+                "database_password": "frtwo",
+                "shared_app_stack": True,
+                "backend_port": 8000,
+                "frontend_port": 8080,
+                "shared_database_name": "frtwo",
             },
             "storage": {
                 "wipe_before_attempt": True,

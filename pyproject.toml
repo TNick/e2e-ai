@@ -23,6 +23,10 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
 ]
+monitor = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 
 [project.scripts]
 e2e-ai = "e2e_ai.cli:main"
@@ -34,6 +38,17 @@ cursor = "e2e_ai.agents.builtins:CURSOR"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/e2e_ai"]
+# The bundled monitor UI assets live inside the package and ship by default.
+# Ensure they are not treated as build artifacts to exclude.
+artifacts = ["src/e2e_ai/monitor/static/**"]
+
+[tool.distlift]
+language = "python"
+mode = "simple"
+version_source = "manifest"
+manifest_path = "pyproject.toml"
+tag_template = "v{version}"
+remotes = ["origin"]
 
 [tool.ruff]
 line-length = 88
@@ -41,3 +56,12 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency-injection markers are called in argument defaults by design.
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Depends",
+]

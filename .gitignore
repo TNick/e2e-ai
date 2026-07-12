@@ -1,4 +1,5 @@
 research/
+playground/
 
 # e2e-ai local state (test catalog DB, per-test workdirs, agent runs)
 .e2e-ai/
@@ -15,3 +16,7 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Monitor UI (source). Built assets under src/e2e_ai/monitor/static are shipped.
+monitor-ui/node_modules/
+monitor-ui/dist/

@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>e2e-ai monitor</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #d7dbe3;
+    --muted: #8b93a3; --accent: #4c8bf5; --ok: #3fb27f; --fail: #e5534b;
+    --warn: #d9a441; --run: #4c8bf5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  a { color: var(--accent); text-decoration: none; }
+  .app { display: grid; grid-template-columns: auto 1fr; grid-template-rows: 44px 1fr; height: 100vh; }
+  .bar { grid-column: 1 / 3; display: flex; align-items: center; gap: 12px; padding: 0 12px;
+         background: var(--panel); border-bottom: 1px solid var(--border); }
+  .bar .title { font-weight: 600; }
+  .bar .spacer { flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .side { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto;
+          width: 190px; transition: width .12s; }
+  .side.collapsed { width: 46px; }
+  .side nav a { display: flex; align-items: center; gap: 10px; padding: 9px 12px; color: var(--text);
+                border-left: 3px solid transparent; cursor: pointer; }
+  .side nav a.active { border-left-color: var(--accent); background: #1e222b; }
+  .side.collapsed .label { display: none; }
+  .ico { width: 18px; text-align: center; }
+  main { overflow: auto; padding: 14px; }
+  h2 { margin: 0 0 10px; font-size: 15px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--bg); }
+  tr:hover td { background: #14171e; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+  .pill { padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border); }
+  .s-passed, .s-passing, .s-exited0 { color: var(--ok); }
+  .s-failed, .s-failing, .s-failed_to_start { color: var(--fail); }
+  .s-running, .s-blocked { color: var(--run); }
+  .muted { color: var(--muted); }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+  button.secondary { background: #2a2f3a; }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select { background: #10131a; color: var(--text); border: 1px solid var(--border);
+                  border-radius: 4px; padding: 5px 7px; width: 100%; }
+  label.field { display: block; margin: 8px 0; }
+  label.field .k { color: var(--muted); font-size: 12px; }
+  pre { background: #0b0d12; border: 1px solid var(--border); border-radius: 4px; padding: 10px;
+        overflow: auto; max-height: 340px; white-space: pre-wrap; word-break: break-word; }
+  .row-flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .destructive { color: var(--warn); }
+  .copy { cursor: pointer; color: var(--muted); }
+  .info-btn { display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border);
+    color: var(--muted); cursor: pointer; font-style: italic; font-size: 12px;
+    user-select: none; transition: transform .2s ease, color .2s ease; }
+  .info-btn:hover { color: var(--accent); }
+  .info-btn.rotated { transform: rotate(15deg); color: var(--accent); }
+  .page-desc { max-height: 0; overflow: hidden; opacity: 0; margin: 0;
+    transition: max-height .28s ease, opacity .28s ease, margin .28s ease; }
+  .page-desc.open { max-height: 900px; opacity: 1; margin: 8px 0 12px; }
+  .page-desc .card { margin-bottom: 0; }
+  .page-desc dt { color: var(--text); font-weight: 600; margin-top: 6px; }
+  .page-desc dd { color: var(--muted); margin: 0 0 2px 0; }
+  .page-desc .val { color: var(--accent); }
+  .cfg { font-family: ui-monospace, monospace; font-size: 12px; }
+  .cfg .ckey { color: var(--muted); }
+  .cfg .cval { color: var(--text); }
+  .cfg .node { margin-left: 12px; border-left: 1px solid var(--border); padding-left: 8px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <span class="ico" style="cursor:pointer" id="toggle">☰</span>
+    <span class="title">e2e-ai monitor</span>
+    <span class="muted" id="project">—</span>
+    <span class="spacer"></span>
+    <span class="muted" id="dbpath"></span>
+    <span class="dot" id="conn" title="connection"></span>
+  </div>
+  <aside class="side" id="side">
+    <nav id="nav"></nav>
+  </aside>
+  <main id="view"></main>
+</div>
+<script>
+const NAV = [
+  ["active", "Active", "▶"], ["commands", "Commands", "⚙"], ["runs", "Runs", "≡"],
+  ["tests", "Tests", "✓"], ["failures", "Failures", "✗"], ["agents", "Agents", "◆"],
+  ["settings", "Settings", "…"],
+];
+const state = { view: "active", info: null, schemas: [], sel: null, rev: "",
+                sort: {}, filter: {}, drawerRender: null };
+
+async function api(path, opts) {
+  const r = await fetch("/api" + path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+  return r.json();
+}
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const local = (t) => t ? `<span title="${esc(t)}">${new Date(t).toLocaleString()}</span>` : "—";
+const scls = (s) => "s-" + String(s ?? "").toLowerCase();
+
+// Compare two cell values by column type. Dates/date-times compare by their
+// underlying value (parsed timestamp), never by the displayed string.
+function cmp(a, b, type) {
+  if (type === "date") {
+    const av = a ? Date.parse(a) : 0, bv = b ? Date.parse(b) : 0;
+    return (Number.isNaN(av) ? 0 : av) - (Number.isNaN(bv) ? 0 : bv);
+  }
+  if (type === "num") {
+    const av = a == null || a === "" ? -Infinity : Number(a);
+    const bv = b == null || b === "" ? -Infinity : Number(b);
+    return av - bv;
+  }
+  return String(a ?? "").toLowerCase().localeCompare(String(b ?? "").toLowerCase());
+}
+
+// Render a sortable (and optionally status-filterable) table.
+//   columns: [{ label, type: 'date'|'num'|'str', val(row), cell(row)?, cls(row)? }]
+//   opts.filter: { label, val(row) } adds a dropdown that filters by that value.
+// Sort/filter state is kept in `state` keyed by `id`, so silent auto-refreshes
+// and re-renders preserve the user's choice.
+function renderTable(id, columns, rows, opts = {}) {
+  const st = state.sort[id];
+  const fval = state.filter[id] || "__all__";
+  let data = rows.slice();
+  let filterBar = "";
+  if (opts.filter) {
+    const values = [...new Set(rows.map((r) => String(opts.filter.val(r) ?? "")))]
+      .filter(Boolean).sort();
+    if (fval !== "__all__") data = data.filter((r) => String(opts.filter.val(r) ?? "") === fval);
+    filterBar = `<div class="row-flex" style="margin-bottom:6px">
+      <span class="muted">${esc(opts.filter.label)}:</span>
+      <select data-filter="${id}" style="width:auto">
+        <option value="__all__"${fval === "__all__" ? " selected" : ""}>all</option>
+        ${values.map((v) => `<option value="${esc(v)}"${fval === v ? " selected" : ""}>${esc(v)}</option>`).join("")}
+      </select>
+      <span class="muted">${data.length} / ${rows.length}</span></div>`;
+  }
+  if (st) {
+    const col = columns[st.i];
+    if (col) data.sort((a, b) => cmp(col.val(a), col.val(b), col.type) * (st.dir === "desc" ? -1 : 1));
+  }
+  const head = columns.map((c, i) => {
+    const arrow = st && st.i === i ? (st.dir === "desc" ? " ▼" : " ▲") : "";
+    return `<th data-sort="${id}:${i}" style="cursor:pointer" title="Sort">${esc(c.label)}${arrow}</th>`;
+  }).join("");
+  const body = data.map((r) => `<tr>${columns.map((c) =>
+    `<td class="${c.cls ? c.cls(r) : ""}">${c.cell ? c.cell(r) : esc(c.val(r) ?? "")}</td>`).join("")}</tr>`).join("");
+  return filterBar + `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function renderNav() {
+  document.getElementById("nav").innerHTML = NAV.map(([id, label, ico]) =>
+    `<a data-v="${id}" class="${state.view === id ? "active" : ""}">
+       <span class="ico">${ico}</span><span class="label">${label}</span></a>`).join("");
+  document.querySelectorAll("#nav a").forEach((a) => {
+    a.setAttribute("href", "#" + a.dataset.v);
+    a.onclick = (e) => { e.preventDefault(); navigate(a.dataset.v); };
+  });
+}
+
+// Hash routing: the URL (#active, #runs, …) reflects the current page, so the
+// address bar updates and browser back/forward + deep links work.
+function navigate(view) {
+  if (!VIEWS[view]) return;
+  if (location.hash.slice(1) === view) { render(); return; }
+  location.hash = view;  // triggers the hashchange handler below
+}
+function viewFromHash() {
+  const v = decodeURIComponent(location.hash.slice(1));
+  return VIEWS[v] ? v : "active";
+}
+window.addEventListener("hashchange", () => {
+  const v = viewFromHash();
+  if (v !== state.view) { state.view = v; render(); }
+});
+
+async function viewActive(el) {
+  const [summary, shards] = await Promise.all([api("/summary"), api("/shards")]);
+  const c = summary.counts || {};
+  el.innerHTML = `<h2>Active</h2>
+    <div class="grid">
+      ${card("Runnable tests", c.runnable)}${card("Runs", c.runs)}
+      ${card("Attempts", c.attempts)}${card("Active attempts", summary.active_attempts)}
+      ${card("Failures", c.failures)}
+    </div>
+    <h2 style="margin-top:14px">Live shards / runners</h2>
+    ${shards.items.length ? shards.items.map(shardCard).join("") :
+      '<div class="card muted">No active attempts. Start a run from Commands.</div>'}`;
+}
+const card = (k, v) => `<div class="card"><div class="muted">${k}</div><div style="font-size:22px">${v ?? 0}</div></div>`;
+function shardCard(s) {
+  const a = s.attempts[0] || {};
+  const urls = [s.frontend_url && link(s.frontend_url), s.backend_url && link(s.backend_url)].filter(Boolean).join(" ");
+  return `<div class="card">
+    <div class="row-flex"><b>${esc(s.label)}</b>
+      <span class="pill">${esc(s.database_name || "no-db")}</span>
+      <span class="spacer"></span>${urls}</div>
+    <div>${esc(a.title || "—")} <span class="muted">${esc(a.spec_file || "")}</span></div>
+    <div class="muted">attempt ${esc(a.attempt_index)} · started ${local(a.started_at)} · ${s.attempts.length} attempt(s)</div>
+  </div>`;
+}
+const link = (u) => `<a href="${esc(u)}" target="_blank">${esc(u)}</a>`;
+
+async function viewRuns(el) {
+  const runs = await api("/runs?limit=100");
+  const table = renderTable("runs", [
+    { label: "Started", type: "date", val: (r) => r.started_at, cell: (r) => local(r.started_at) },
+    { label: "Finished", type: "date", val: (r) => r.finished_at, cell: (r) => local(r.finished_at) },
+    { label: "Status", type: "str", val: (r) => r.status, cls: (r) => scls(r.status) },
+    { label: "Attempts", type: "num", val: (r) => r.attempt_count },
+    { label: "Reason", type: "str", val: (r) => r.reason || "", cls: () => "muted" },
+    { label: "Id", type: "str", val: (r) => r.id, cell: (r) => `<a data-run="${esc(r.id)}">${esc(r.id)}</a>` },
+  ], runs.items, { filter: { label: "Status", val: (r) => r.status } });
+  el.innerHTML = `<h2>Runs (${runs.total})</h2>${table}`;
+}
+async function showRun(id) {
+  state.drawerRender = () => showRun(id);
+  const r = await api("/runs/" + encodeURIComponent(id));
+  const attempts = renderTable("run-attempts", [
+    { label: "Test", type: "str", val: (a) => a.title },
+    { label: "#", type: "num", val: (a) => a.attempt_index },
+    { label: "Status", type: "str", val: (a) => a.status, cls: (a) => scls(a.status) },
+    { label: "Exit", type: "num", val: (a) => a.exit_code },
+    { label: "Started", type: "date", val: (a) => a.started_at, cell: (a) => local(a.started_at) },
+    { label: "DB", type: "str", val: (a) => a.database_name || "", cls: () => "muted" },
+  ], r.attempts);
+  openDrawer(`Run ${esc(id)}`, `
+    <div class="muted">${esc(r.status)} · ${local(r.started_at)} → ${local(r.finished_at)}</div>
+    <h3>Attempts</h3>${attempts}
+    <h3>Agent invocations</h3>${r.agents.length ? r.agents.map((g) =>
+      `<div>· ${esc(g.role)} → ${esc(g.agent_id)} <span class="${scls(g.status)}">${esc(g.status)}</span></div>`).join("")
+      : '<div class="muted">none</div>'}
+    <h3>Failures</h3>${r.failures.map((f) =>
+      `<div>· <a data-fail="${esc(f.id)}">${esc(f.signature)}</a> ${esc((f.error_message||"").split("\n")[0])}</div>`).join("") || '<div class="muted">none</div>'}`);
+}
+
+async function viewTests(el) {
+  const t = await api("/tests");
+  const flags = (x) => `${x.excluded ? "excluded " : ""}${x.is_stale ? "stale" : ""}`.trim();
+  const table = renderTable("tests", [
+    { label: "Status", type: "str", val: (x) => x.last_status || "unknown", cls: (x) => scls(x.last_status) },
+    { label: "Spec", type: "str", val: (x) => x.spec_file, cls: () => "muted" },
+    { label: "Title", type: "str", val: (x) => x.title, cell: (x) => `<a data-test="${esc(x.id)}">${esc(x.title)}</a>` },
+    { label: "Project", type: "str", val: (x) => x.project_name || "" },
+    { label: "Flags", type: "str", val: flags, cls: () => "muted" },
+  ], t.items, { filter: { label: "Status", val: (x) => x.last_status || "unknown" } });
+  el.innerHTML = `<h2>Tests (${t.items.length})</h2>${table}`;
+}
+async function showTest(id) {
+  state.drawerRender = () => showTest(id);
+  const t = await api("/tests/" + encodeURIComponent(id));
+  const attempts = renderTable("test-attempts", [
+    { label: "Started", type: "date", val: (a) => a.started_at, cell: (a) => local(a.started_at) },
+    { label: "#", type: "num", val: (a) => a.attempt_index },
+    { label: "Status", type: "str", val: (a) => a.status, cls: (a) => scls(a.status) },
+    { label: "Exit", type: "num", val: (a) => a.exit_code },
+  ], t.attempts);
+  openDrawer(esc(t.title),
+    `<div class="muted">${esc(t.spec_file)} · ${esc(t.last_status||"unknown")}</div>
+     <h3>Attempts</h3>${attempts}`);
+}
+
+async function viewFailures(el) {
+  const runs = await api("/runs?limit=50");
+  const all = [];
+  for (const r of runs.items.slice(0, 15)) {
+    const full = await api("/runs/" + encodeURIComponent(r.id));
+    full.failures.forEach((f) => all.push({ ...f, run: r.id }));
+  }
+  if (!all.length) { el.innerHTML = '<h2>Recent failures</h2><div class="card muted">No failures recorded.</div>'; return; }
+  const table = renderTable("failures", [
+    { label: "When", type: "date", val: (f) => f.created_at, cell: (f) => local(f.created_at) },
+    { label: "Signature", type: "str", val: (f) => f.signature, cell: (f) => `<a data-fail="${esc(f.id)}">${esc(f.signature)}</a>` },
+    { label: "Message", type: "str", val: (f) => (f.error_message || "").split("\n")[0], cls: () => "muted" },
+  ], all);
+  el.innerHTML = `<h2>Recent failures</h2>${table}`;
+}
+async function showFailure(id) {
+  state.drawerRender = null;
+  const f = await api("/failures/" + encodeURIComponent(id));
+  openDrawer("Failure " + esc(f.signature),
+    `<pre>${esc(f.error_message)}</pre><h3>Packet payload</h3>
+     <pre>${esc(JSON.stringify(f.payload, null, 2))}</pre>`);
+}
+
+async function viewAgents(el) {
+  const g = await api("/agents");
+  const table = renderTable("agents", [
+    { label: "Started", type: "date", val: (x) => x.started_at, cell: (x) => local(x.started_at) },
+    { label: "Finished", type: "date", val: (x) => x.finished_at, cell: (x) => local(x.finished_at) },
+    { label: "Role", type: "str", val: (x) => x.role },
+    { label: "Agent", type: "str", val: (x) => x.agent_id },
+    { label: "Status", type: "str", val: (x) => x.status, cls: (x) => scls(x.status) },
+    { label: "Exit", type: "num", val: (x) => x.exit_code },
+  ], g.items, { filter: { label: "Status", val: (x) => x.status } });
+  el.innerHTML = `<h2>Agent invocations</h2>${table}`;
+}
+
+// ── Commands + options forms ────────────────────────────────────────────────
+async function viewCommands(el) {
+  const [cmds, runs] = await Promise.all([api("/commands"), api("/command-runs")]);
+  state.schemas = cmds.items;
+  el.innerHTML = `<h2>Commands</h2>
+    <div class="grid">${cmds.items.map((c) => `<div class="card">
+      <div class="row-flex"><b>${esc(c.label)}</b>
+        ${c.destructive ? '<span class="pill destructive">destructive</span>' : ""}
+        ${c.long_running ? '<span class="pill">long-running</span>' : ""}</div>
+      <div class="muted">e2e-ai ${esc(c.argv_prefix.join(" "))}</div>
+      <div style="margin-top:8px"><button data-cmd="${esc(c.id)}">Options…</button></div>
+    </div>`).join("")}</div>
+    <h2 style="margin-top:14px">Monitor-launched runs</h2>
+    ${renderTable("cmd-runs", [
+      { label: "Started", type: "date", val: (r) => r.started_at, cell: (r) => local(r.started_at) },
+      { label: "Command", type: "str", val: (r) => r.command_id },
+      { label: "Status", type: "str", val: (r) => r.status, cls: (r) => scls(r.status) },
+      { label: "Exit", type: "num", val: (r) => r.exit_code },
+      { label: "", type: "str", val: () => "", cell: (r) => `<a data-out="${esc(r.command_run_id)}">output</a>` },
+    ], runs.items, { filter: { label: "Status", val: (r) => r.status } })}`;
+}
+
+function fieldHtml(o) {
+  const v = o.default;
+  if (o.type === "boolean" || o.type === "toggle")
+    return `<label class="field"><input type="checkbox" data-opt="${o.name}" style="width:auto"
+      ${v ? "checked" : ""}/> <span class="k">${o.name}</span> — ${esc(o.help)}</label>`;
+  if (o.type === "choice")
+    return `<label class="field"><span class="k">${o.name}</span>
+      <select data-opt="${o.name}">${o.choices.map((c) =>
+        `<option ${c===v?"selected":""}>${esc(c)}</option>`).join("")}</select></label>`;
+  const t = o.type === "integer" ? "number" : "text";
+  const ph = o.type === "repeatable_path" ? "comma-separated paths" : "";
+  return `<label class="field"><span class="k">${o.name} <span class="muted">(${o.type})</span></span>
+    <input type="${t}" data-opt="${o.name}" placeholder="${ph}" value="${v==null?"":esc(v)}"/>
+    <span class="muted">${esc(o.help)}</span></label>`;
+}
+function openOptions(id) {
+  state.drawerRender = null;
+  const c = state.schemas.find((x) => x.id === id);
+  openDrawer("Options: " + esc(c.label),
+    `<div class="muted">e2e-ai ${esc(c.argv_prefix.join(" "))}</div>
+     <form id="optform">${c.options.map(fieldHtml).join("")}</form>
+     <div class="row-flex" style="margin-top:10px">
+       <button id="startbtn">Start</button>
+       <button class="secondary" id="cancelbtn">Cancel</button>
+       <span id="opterr" class="destructive"></span></div>`);
+  document.getElementById("cancelbtn").onclick = closeDrawer;
+  document.getElementById("startbtn").onclick = () => submitCommand(c);
+}
+async function submitCommand(c) {
+  const btn = document.getElementById("startbtn");
+  btn.disabled = true;
+  const opts = {};
+  c.options.forEach((o) => {
+    const el = document.querySelector(`[data-opt="${o.name}"]`);
+    if (!el) return;
+    if (o.type === "boolean" || o.type === "toggle") opts[o.name] = el.checked;
+    else if (o.type === "repeatable_path") {
+      const parts = el.value.split(",").map((s) => s.trim()).filter(Boolean);
+      if (parts.length) opts[o.name] = parts;
+    } else if (el.value !== "") opts[o.name] = o.type === "integer" ? Number(el.value) : el.value;
+  });
+  try {
+    const res = await api(`/commands/${encodeURIComponent(c.id)}/runs`,
+      { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ options: opts }) });
+    // Transition the same drawer straight to the output view (no close +
+    // full-page re-render + delay, which briefly flashed the Commands page).
+    state.view = "commands";
+    showOutput(res.command_run_id);
+  } catch (e) {
+    document.getElementById("opterr").textContent = e.message;
+    btn.disabled = false;
+  }
+}
+let outTimer = null;
+async function showOutput(id) {
+  state.drawerRender = null;
+  clearInterval(outTimer);
+  const draw = async () => {
+    const [r, out] = await Promise.all([
+      api("/command-runs/" + encodeURIComponent(id)),
+      api("/command-runs/" + encodeURIComponent(id) + "/output"),
+    ]);
+    openDrawer("Command run " + esc(id),
+      `<div class="muted">${esc(r.command_id)} · <span class="${scls(r.status)}">${esc(r.status)}</span>
+        · exit ${esc(r.exit_code ?? "—")}</div><pre>${esc(out.output || "(no output yet)")}</pre>`);
+    if (r.status === "running") outTimer = setTimeout(draw, 1000);
+  };
+  draw();
+}
+
+function viewSettings(el) {
+  const i = state.info || {};
+  el.innerHTML = `<h2>Settings</h2><div class="card">
+    <div><b>Project:</b> ${esc(i.project_id)}</div>
+    <div><b>Project root:</b> <span class="copy" data-copy="${esc(i.project_root)}">${esc(i.project_root)} ⧉</span></div>
+    <div><b>State DB:</b> <span class="copy" data-copy="${esc(i.db_path)}">${esc(i.db_path)} ⧉</span></div>
+    <div><b>Bind:</b> ${esc(i.host)}:${esc(i.port)}</div>
+    <div><b>Refresh:</b> ${esc(i.refresh_ms)} ms</div>
+    <div class="muted" style="margin-top:8px">Read-only monitor. Database access is never written.</div>
+  </div>`;
+}
+
+// ── drawer ──────────────────────────────────────────────────────────────────
+function openDrawer(title, html) {
+  let d = document.getElementById("drawer");
+  if (!d) {
+    d = document.createElement("div"); d.id = "drawer";
+    d.style = "position:fixed;top:0;right:0;width:min(680px,90vw);height:100vh;background:var(--panel);border-left:1px solid var(--border);overflow:auto;padding:16px;z-index:20;box-shadow:-8px 0 24px #0008";
+    document.body.appendChild(d);
+  }
+  d.innerHTML = `<div class="row-flex"><h2 style="flex:1">${title}</h2>
+    <button class="secondary" onclick="closeDrawer()">Close</button></div>${html}`;
+}
+function closeDrawer() {
+  const d = document.getElementById("drawer"); if (d) d.remove();
+  clearInterval(outTimer);
+  state.drawerRender = null;
+  render(false);  // refresh the underlying view (e.g. show the new command run)
+}
+
+// ── event delegation: sorting, filtering, row actions ────────────────────────
+// Tables are rebuilt on every render, so handlers are delegated from document
+// rather than re-attached each time.
+document.addEventListener("click", (e) => {
+  const th = e.target.closest("th[data-sort]");
+  if (th) {
+    const [id, iStr] = th.dataset.sort.split(":");
+    const i = Number(iStr);
+    const cur = state.sort[id];
+    state.sort[id] = { i, dir: cur && cur.i === i && cur.dir === "asc" ? "desc" : "asc" };
+    if (th.closest("#drawer") && state.drawerRender) state.drawerRender();
+    else render(false);
+    return;
+  }
+  const a = e.target.closest("[data-run],[data-test],[data-fail],[data-out],[data-cmd],[data-copy]");
+  if (!a) return;
+  const d = a.dataset;
+  if (d.run !== undefined) showRun(d.run);
+  else if (d.test !== undefined) showTest(d.test);
+  else if (d.fail !== undefined) showFailure(d.fail);
+  else if (d.out !== undefined) showOutput(d.out);
+  else if (d.cmd !== undefined) openOptions(d.cmd);
+  else if (d.copy !== undefined) navigator.clipboard?.writeText(d.copy);
+});
+document.addEventListener("change", (e) => {
+  const sel = e.target.closest("select[data-filter]");
+  if (!sel) return;
+  state.filter[sel.dataset.filter] = sel.value;
+  if (sel.closest("#drawer") && state.drawerRender) state.drawerRender();
+  else render(false);
+});
+
+const VIEWS = { active: viewActive, commands: viewCommands, runs: viewRuns, tests: viewTests,
+                failures: viewFailures, agents: viewAgents, settings: viewSettings };
+// showLoading: show a placeholder (manual navigation / first load). Auto-refresh
+// passes false so the current content stays put and is swapped only at the end —
+// no per-second blank flash.
+async function render(showLoading = true) {
+  renderNav();
+  const el = document.getElementById("view");
+  if (showLoading) el.innerHTML = '<div class="muted">Loading…</div>';
+  try { await VIEWS[state.view](el); }
+  catch (e) { el.innerHTML = `<div class="card destructive">Error: ${esc(e.message)}</div>`; }
+}
+
+// Poll the state revision; only re-render when it actually changes, so an idle
+// dashboard does not flicker every second. Commands is refreshed whenever a
+// monitor-launched command is still running (its status lives outside SQLite).
+async function tick() {
+  if (document.getElementById("drawer")) return;
+  let rev;
+  try { rev = (await api("/summary")).revision; } catch { return; }
+  let live = false;
+  if (state.view === "commands") {
+    try { live = (await api("/command-runs")).items.some((r) => r.status === "running"); }
+    catch { live = false; }
+  }
+  if (rev === state.rev && !live) return;
+  state.rev = rev;
+  render(false);
+}
+
+async function boot() {
+  document.getElementById("toggle").onclick = () => {
+    const s = document.getElementById("side"); s.classList.toggle("collapsed");
+    localStorage.setItem("sideCollapsed", s.classList.contains("collapsed"));
+  };
+  if (localStorage.getItem("sideCollapsed") === "true")
+    document.getElementById("side").classList.add("collapsed");
+  try {
+    const h = await api("/health");
+    state.info = h.monitor;
+    document.getElementById("project").textContent = h.monitor.project_id || "(no project)";
+    document.getElementById("dbpath").textContent = h.monitor.db_path;
+    document.getElementById("conn").style.background = h.ok ? "var(--ok)" : "var(--warn)";
+    document.getElementById("conn").title = h.message;
+  } catch (e) { document.getElementById("conn").style.background = "var(--fail)"; }
+  try { state.rev = (await api("/summary")).revision; } catch { state.rev = ""; }
+  state.view = viewFromHash();
+  // Reflect the initial view in the URL without triggering a second render.
+  if (location.hash.slice(1) !== state.view)
+    history.replaceState(null, "", "#" + state.view);
+  render();
+  const ms = (state.info && state.info.refresh_ms) || 1000;
+  setInterval(tick, Math.max(500, ms));
+}
+boot();
+</script>
+</body>
+</html>

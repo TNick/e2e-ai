@@ -13,6 +13,7 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from attrs import define, field
 
@@ -36,12 +37,15 @@ class FrTwoSlot:
     id: str = field()
     database_name: str = field()
     database_user: str = field()
+    database_password: str = field()
     backend_port: int = field()
     frontend_port: int = field()
     root_dir: Path = field()
 
     def database_url(self, host: str = _DB_HOST, port: int = _DB_PORT) -> str:
-        return f"postgresql://{self.database_user}@{host}:{port}/{self.database_name}"
+        user = quote(self.database_user, safe="")
+        password = quote(self.database_password, safe="")
+        return f"postgresql://{user}:{password}@{host}:{port}/{self.database_name}"
 
     def frontend_url(self) -> str:
         return f"http://{_DB_HOST}:{self.frontend_port}"
@@ -60,22 +64,64 @@ def build_fr_two_slots(
     count = int(slots_cfg.get("count", 1))
     prefix = str(slots_cfg.get("database_prefix", "frtwo_e2e_slot"))
     user = str(slots_cfg.get("database_user", "frtwo"))
+    password = str(slots_cfg.get("database_password", "frtwo"))
+    shared_app_stack = bool(slots_cfg.get("shared_app_stack", False))
+    shared_database = slots_cfg.get("shared_database_name")
+    backend_base = int(slots_cfg.get("backend_port", _BACKEND_PORT_BASE))
+    frontend_base = int(slots_cfg.get("frontend_port", _FRONTEND_PORT_BASE))
 
     slots: list[FrTwoSlot] = []
     for index in range(count):
         slot_id = f"slot{index}"
+        if shared_app_stack:
+            backend_port = backend_base
+            frontend_port = frontend_base
+        else:
+            backend_port = backend_base + index
+            frontend_port = frontend_base + index
+        if shared_database:
+            database_name = str(shared_database)
+        else:
+            database_name = f"{prefix}{index}"
         slots.append(
             FrTwoSlot(
                 id=slot_id,
-                # Stable name derived from the index: never changes per attempt.
-                database_name=f"{prefix}{index}",
+                database_name=database_name,
                 database_user=user,
-                backend_port=_BACKEND_PORT_BASE + index,
-                frontend_port=_FRONTEND_PORT_BASE + index,
+                database_password=password,
+                backend_port=backend_port,
+                frontend_port=frontend_port,
                 root_dir=project_root / "playground" / "e2e" / "slots" / slot_id,
             )
         )
     return slots
+
+
+def slot_for_test(slots: Sequence[FrTwoSlot], test_id: str) -> FrTwoSlot:
+    """Return the stable slot assigned to a test id."""
+
+    return _select_slot(slots, test_id)
+
+
+def pick_test_for_undercovered_slots(
+    catalog: Sequence[DiscoveredTest],
+    slots: Sequence[FrTwoSlot],
+    needy_slot_ids: set[str],
+    *,
+    prefer_unrun: set[str] | None = None,
+) -> DiscoveredTest | None:
+    """Pick a catalog test that maps to one of the under-covered slots."""
+
+    unrun = prefer_unrun or set()
+    for test in catalog:
+        if test.id in unrun:
+            continue
+        if slot_for_test(slots, test.id).id in needy_slot_ids:
+            return test
+    for test in catalog:
+        if slot_for_test(slots, test.id).id in needy_slot_ids:
+            return test
+    return None
 
 
 def _select_slot(slots: Sequence[FrTwoSlot], test_id: str) -> FrTwoSlot:
@@ -219,6 +265,10 @@ def release_fr_two_slot(
 def _restore_slot_database(context: IsolationContext, slot: FrTwoSlot) -> None:
     """Restore a slot database from the prebuilt baseline (best effort)."""
 
+    isolation = fr_two_isolation_section(context.config)
+    slots_cfg = isolation.get("slots") or {}
+    if slots_cfg.get("shared_database_name"):
+        return
     if not _psql_baseline_available(context):
         return
     baseline = f"{slot.database_name}_baseline"

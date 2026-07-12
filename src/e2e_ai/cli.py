@@ -59,14 +59,145 @@ def _project_root_option(func):
     )(func)
 
 
+def _repair_options(func):
+    func = click.option(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only repair the first N tests.",
+    )(func)
+    func = click.option("--test-id", default=None, help="Repair only this test id.")(
+        func
+    )
+    func = click.option(
+        "--max-attempts",
+        type=int,
+        default=None,
+        help="Override repair_policy.max_attempts_per_test.",
+    )(func)
+    func = click.option(
+        "--rediscover/--no-rediscover",
+        default=True,
+        show_default=True,
+        help="Refresh the inventory before repairing.",
+    )(func)
+    func = click.option(
+        "--skip-login-check",
+        is_flag=True,
+        help="Do not verify agent logins before starting.",
+    )(func)
+    func = click.option(
+        "--dry-run-agents",
+        "dry_run_agents",
+        is_flag=True,
+        help="Build failure packets and prompts without invoking agent CLIs.",
+    )(func)
+    func = click.option(
+        "--dry-run",
+        is_flag=True,
+        help="Alias for --dry-run-agents.",
+    )(func)
+    func = click.option(
+        "--start-runtime/--no-start-runtime",
+        default=True,
+        show_default=True,
+        help="Start configured target Docker support before running tests.",
+    )(func)
+    return func
+
+
+def _run_repair(
+    *,
+    project_root: Path,
+    limit: int | None,
+    test_id: str | None,
+    max_attempts: int | None,
+    rediscover: bool,
+    skip_login_check: bool,
+    dry_run_agents: bool,
+    dry_run: bool,
+    start_runtime: bool,
+) -> None:
+    """Run the repair loop using the shared CLI options."""
+
+    config = _load(project_root)
+    if max_attempts is not None:
+        from attrs import evolve
+
+        config = evolve(
+            config,
+            repair_policy=evolve(
+                config.repair_policy,
+                max_attempts_per_test=max_attempts,
+            ),
+        )
+    registry = AgentRegistry.from_config(config)
+    agents_dry = dry_run_agents or dry_run
+
+    if not skip_login_check and not agents_dry:
+        statuses = registry.require_logins()
+        for status in statuses:
+            verified = "" if status.verified else " (unverified)"
+            click.echo(f"  login ok: {status.agent_id}{verified}")
+
+    if rediscover:
+        discover_inventory(config)
+    ensure_state_layout(config)
+    backend = _prepare_backend(config)
+    conn = ensure_database(database_path(config))
+    try:
+        loop = FixLoop(
+            config,
+            conn,
+            registry,
+            backend=backend,
+            reporter=default_reporter,
+            dry_run=agents_dry,
+        )
+        loop.ensure_dirs()
+        summary = loop.run(
+            limit=limit,
+            test_ids=[test_id] if test_id else None,
+            start_runtime=start_runtime,
+        )
+    except TargetRuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        conn.close()
+    if test_id and not summary.reports:
+        raise click.ClickException(f"no runnable test with id {test_id!r}")
+    _print_summary(summary)
+    raise SystemExit(0 if summary.all_green else 1)
+
+
 def build_cli() -> click.Group:
     """Build and return the root Click command group."""
 
-    @click.group()
+    @click.group(
+        invoke_without_command=True,
+        help=(
+            "AI-driven Playwright e2e repair loop. When no subcommand is "
+            "given, `e2e-ai` runs `repair` with the same options."
+        ),
+    )
     @click.version_option(_version(), prog_name="e2e-ai")
+    @_project_root_option
+    @_repair_options
     @click.option("-v", "--verbose", count=True, help="Increase logging verbosity.")
     @click.pass_context
-    def cli(ctx: click.Context, verbose: int) -> None:
+    def cli(
+        ctx: click.Context,
+        verbose: int,
+        project_root: Path,
+        limit: int | None,
+        test_id: str | None,
+        max_attempts: int | None,
+        rediscover: bool,
+        skip_login_check: bool,
+        dry_run_agents: bool,
+        dry_run: bool,
+        start_runtime: bool,
+    ) -> None:
         """AI-driven Playwright e2e repair loop."""
 
         ctx.ensure_object(dict)
@@ -75,6 +206,18 @@ def build_cli() -> click.Group:
             level=logging.WARNING - min(verbose, 2) * 10,
             format="%(levelname)s %(name)s: %(message)s",
         )
+        if ctx.invoked_subcommand is None and not ctx.resilient_parsing:
+            _run_repair(
+                project_root=project_root,
+                limit=limit,
+                test_id=test_id,
+                max_attempts=max_attempts,
+                rediscover=rediscover,
+                skip_login_check=skip_login_check,
+                dry_run_agents=dry_run_agents,
+                dry_run=dry_run,
+                start_runtime=start_runtime,
+            )
 
     # ── doctor ──────────────────────────────────────────────────────────────
     @cli.command()
@@ -254,6 +397,12 @@ def build_cli() -> click.Group:
         show_default=True,
         help="Start configured target Docker support before running tests.",
     )
+    @click.option(
+        "--shard-min-tests",
+        type=int,
+        default=None,
+        help="Run until each fr-two slot has at least N passing tests.",
+    )
     def run(
         project_root: Path,
         test_id: str | None,
@@ -262,6 +411,7 @@ def build_cli() -> click.Group:
         limit: int | None,
         rediscover: bool,
         start_runtime: bool,
+        shard_min_tests: int | None,
     ) -> None:
         """Run runnable tests once each and record results (no fixing)."""
 
@@ -290,6 +440,7 @@ def build_cli() -> click.Group:
                 test_ids=[test_id] if test_id else None,
                 stop_on_failure=fail_fast,
                 start_runtime=start_runtime,
+                min_tests_per_slot=shard_min_tests,
             )
         except TargetRuntimeError as exc:
             raise click.ClickException(str(exc)) from exc
@@ -303,44 +454,7 @@ def build_cli() -> click.Group:
     # ── repair (the full fix loop) ──────────────────────────────────────────
     @cli.command()
     @_project_root_option
-    @click.option(
-        "--limit", type=int, default=None, help="Only repair the first N tests."
-    )
-    @click.option("--test-id", default=None, help="Repair only this test id.")
-    @click.option(
-        "--max-attempts",
-        type=int,
-        default=None,
-        help="Override repair_policy.max_attempts_per_test.",
-    )
-    @click.option(
-        "--rediscover/--no-rediscover",
-        default=True,
-        show_default=True,
-        help="Refresh the inventory before repairing.",
-    )
-    @click.option(
-        "--skip-login-check",
-        is_flag=True,
-        help="Do not verify agent logins before starting.",
-    )
-    @click.option(
-        "--dry-run-agents",
-        "dry_run_agents",
-        is_flag=True,
-        help="Build failure packets and prompts without invoking agent CLIs.",
-    )
-    @click.option(
-        "--dry-run",
-        is_flag=True,
-        help="Alias for --dry-run-agents.",
-    )
-    @click.option(
-        "--start-runtime/--no-start-runtime",
-        default=True,
-        show_default=True,
-        help="Start configured target Docker support before running tests.",
-    )
+    @_repair_options
     def repair(
         project_root: Path,
         limit: int | None,
@@ -353,55 +467,17 @@ def build_cli() -> click.Group:
         start_runtime: bool,
     ) -> None:
         """Run the AI fix loop until tests pass or are judged unsolvable."""
-
-        config = _load(project_root)
-        if max_attempts is not None:
-            from attrs import evolve
-
-            config = evolve(
-                config,
-                repair_policy=evolve(
-                    config.repair_policy,
-                    max_attempts_per_test=max_attempts,
-                ),
-            )
-        registry = AgentRegistry.from_config(config)
-        agents_dry = dry_run_agents or dry_run
-
-        if not skip_login_check and not agents_dry:
-            statuses = registry.require_logins()
-            for status in statuses:
-                verified = "" if status.verified else " (unverified)"
-                click.echo(f"  login ok: {status.agent_id}{verified}")
-
-        if rediscover:
-            discover_inventory(config)
-        ensure_state_layout(config)
-        backend = _prepare_backend(config)
-        conn = ensure_database(database_path(config))
-        try:
-            loop = FixLoop(
-                config,
-                conn,
-                registry,
-                backend=backend,
-                reporter=default_reporter,
-                dry_run=agents_dry,
-            )
-            loop.ensure_dirs()
-            summary = loop.run(
-                limit=limit,
-                test_ids=[test_id] if test_id else None,
-                start_runtime=start_runtime,
-            )
-        except TargetRuntimeError as exc:
-            raise click.ClickException(str(exc)) from exc
-        finally:
-            conn.close()
-        if test_id and not summary.reports:
-            raise click.ClickException(f"no runnable test with id {test_id!r}")
-        _print_summary(summary)
-        raise SystemExit(0 if summary.all_green else 1)
+        _run_repair(
+            project_root=project_root,
+            limit=limit,
+            test_id=test_id,
+            max_attempts=max_attempts,
+            rediscover=rediscover,
+            skip_login_check=skip_login_check,
+            dry_run_agents=dry_run_agents,
+            dry_run=dry_run,
+            start_runtime=start_runtime,
+        )
 
     # ── agents ──────────────────────────────────────────────────────────────
     @cli.group()
@@ -613,6 +689,132 @@ def build_cli() -> click.Group:
             click.echo(f"{verb} {removed} artifact director(y/ies).")
 
         raise SystemExit(0)
+
+    # ── ui (local read-only web monitor) ─────────────────────────────────────
+    @cli.command()
+    @_project_root_option
+    @click.option(
+        "--host",
+        default=None,
+        help="Host/interface to bind (default: monitor.host or "
+        "127.0.0.1). Non-loopback prints a warning.",
+    )
+    @click.option(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to serve on (default: monitor.port or 8765).",
+    )
+    @click.option(
+        "--refresh-ms",
+        type=int,
+        default=None,
+        help="Live-refresh interval hint in ms (default: monitor.refresh_ms or 1000).",
+    )
+    @click.option(
+        "--db",
+        "db_path",
+        type=click.Path(path_type=Path),
+        default=None,
+        help="State database path (default: from config).",
+    )
+    @click.option(
+        "--open",
+        "open_browser",
+        is_flag=True,
+        help="Open the dashboard in a browser after starting.",
+    )
+    def ui(
+        project_root: Path,
+        host: str | None,
+        port: int | None,
+        refresh_ms: int | None,
+        db_path: Path | None,
+        open_browser: bool,
+    ) -> None:
+        """Start a local, read-only web monitor for the state database.
+
+        Host, port, and refresh interval default to the ``monitor`` section of
+        the project config; the CLI flags override them.
+        """
+
+        from .config import MonitorConfig
+        from .monitor import (
+            MonitorError,
+            build_monitor,
+            ensure_monitor_extra,
+            run_server,
+        )
+
+        try:
+            ensure_monitor_extra()
+        except MonitorError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        config: EffectiveConfig | None
+        if db_path is not None:
+            resolved_db = db_path.resolve()
+            try:
+                config = load_effective_config(project_root.resolve())
+                project_id = config.project_id
+                state_dir = config.state_dir
+                proot = config.project_root
+            except E2eAiError:
+                config = None
+                proot = project_root.resolve()
+                state_dir = resolved_db.parent
+                project_id = ""
+        else:
+            config = _load(project_root)
+            resolved_db = database_path(config)
+            project_id = config.project_id
+            state_dir = config.state_dir
+            proot = config.project_root
+
+        # Resolve host/port/refresh: CLI flag > config monitor section > default.
+        monitor_cfg = config.monitor if config is not None else MonitorConfig()
+        host = host if host is not None else monitor_cfg.host
+        port = port if port is not None else monitor_cfg.port
+        refresh_ms = refresh_ms if refresh_ms is not None else monitor_cfg.refresh_ms
+        open_browser = open_browser or monitor_cfg.open_browser
+
+        # Full merged config (defaults + user + project) for the Settings page.
+        config_full = None
+        if config is not None:
+            from attrs import asdict
+
+            config_full = json.loads(json.dumps(asdict(config), default=str))
+
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            click.echo(
+                f"WARNING: binding to {host} exposes the read-only monitor beyond "
+                "this machine. A future release will require an access token for "
+                "non-loopback hosts.",
+                err=True,
+            )
+
+        try:
+            app, _store, _procs, _info = build_monitor(
+                db_path=resolved_db,
+                project_root=proot,
+                state_dir=state_dir,
+                project_id=project_id,
+                host=host,
+                port=port,
+                refresh_ms=refresh_ms,
+                config_full=config_full,
+            )
+        except MonitorError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        url = f"http://{host}:{port}/"
+        click.echo(f"e2e-ai monitor on {url}")
+        click.echo(f"state database: {resolved_db}")
+        if open_browser:
+            import webbrowser
+
+            webbrowser.open(url)
+        run_server(app, host=host, port=port)
 
     return cli
 

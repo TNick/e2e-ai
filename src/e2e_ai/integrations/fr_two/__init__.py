@@ -20,9 +20,11 @@ from .isolation import (
     build_fr_two_slots,
     create_fr_two_isolation_backend,
     lease_fr_two_slot,
+    pick_test_for_undercovered_slots,
     prepare_fr_two_baseline,
     release_fr_two_slot,
     reset_fr_two_slot,
+    slot_for_test,
 )
 from .manifest import FrTwoManifest, load_fr_two_manifest, write_fr_two_manifest
 from .reports import (
@@ -55,8 +57,10 @@ __all__ = [
     "lease_fr_two_slot",
     "load_fr_two_manifest",
     "map_fr_two_report_to_packet_context",
+    "pick_test_for_undercovered_slots",
     "prepare_fr_two_baseline",
     "release_fr_two_slot",
+    "slot_for_test",
     "render_fr_two_compose_override",
     "reset_fr_two_minio_prefix",
     "reset_fr_two_slot",

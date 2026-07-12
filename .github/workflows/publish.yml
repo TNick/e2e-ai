@@ -1,8 +1,12 @@
 name: Publish
 
+# Builds, creates a GitHub Release, and uploads to PyPI via trusted publishing
+# (OIDC). Triggered when distlift (or a maintainer) pushes a v* tag.
+
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -45,11 +49,27 @@ jobs:
           name: dist
           path: dist/*
 
-  publish:
+  create-release:
     needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+
+  publish:
+    needs: [build, create-release]
     runs-on: ubuntu-latest
     environment:
       name: pypi
+
     permissions:
       contents: read
       id-token: write

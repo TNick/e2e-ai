@@ -109,6 +109,10 @@ isolation:
     count: 4                       # number of stable execution slots
     database_prefix: frtwo_e2e_slot  # slot i -> database `frtwo_e2e_slot{i}`
     database_user: frtwo             # stable DB user shared by all slots
+    shared_app_stack: true           # one Docker lab stack; slots differ by id/storage
+    backend_port: 8000
+    frontend_port: 8080
+    shared_database_name: frtwo
   storage:
     wipe_before_attempt: true  # reset file/object storage before each attempt
     targets:

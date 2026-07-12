@@ -45,7 +45,14 @@ FR_TWO_YAML = textwrap.dedent(
       backend: fr_two
       keep_on_failure: true
       keep_on_success: false
-      slots: {count: 4, database_prefix: frtwo_e2e_slot, database_user: frtwo}
+      slots:
+        count: 4
+        database_prefix: frtwo_e2e_slot
+        database_user: frtwo
+        shared_app_stack: true
+        backend_port: 8000
+        frontend_port: 8080
+        shared_database_name: frtwo
       storage:
         wipe_before_attempt: true
         targets:
@@ -114,11 +121,20 @@ class TestFrTwoSlot:
         first = _slots(tmp_path)
         second = _slots(tmp_path)
         assert [s.database_name for s in first] == [s.database_name for s in second]
-        assert first[0].database_name == "frtwo_e2e_slot0"
+        assert first[0].database_name == "frtwo"
 
     def test_slot_database_user_is_stable(self, tmp_path):
         slots = _slots(tmp_path)
         assert {s.database_user for s in slots} == {"frtwo"}
+
+    def test_shared_app_stack_uses_primary_urls(self, tmp_path):
+        slots = _slots(tmp_path)
+        assert {s.frontend_port for s in slots} == {8080}
+        assert {s.backend_port for s in slots} == {8000}
+
+    def test_database_url_includes_password(self, tmp_path):
+        slot = _slots(tmp_path)[0]
+        assert slot.database_url() == ("postgresql://frtwo:frtwo@127.0.0.1:5432/frtwo")
 
 
 class TestFrTwoStorage:
@@ -161,7 +177,7 @@ class TestFrTwoCompose:
             assert f"frtwo-frontend-{slot.id}" in services
         backend0 = services["frtwo-backend-slot0"]
         assert backend0["ports"] == ["8000:8000"]
-        assert backend0["environment"]["POSTGRES_DB"] == "frtwo_e2e_slot0"
+        assert backend0["environment"]["POSTGRES_DB"] == "frtwo"
 
 
 class TestFrTwoManifest:
@@ -172,7 +188,7 @@ class TestFrTwoManifest:
         manifest = load_fr_two_manifest(path)
         assert manifest.project_id == "fr-two"
         assert len(manifest.slots) == 4
-        assert manifest.slot("slot0")["database_name"] == "frtwo_e2e_slot0"
+        assert manifest.slot("slot0")["database_name"] == "frtwo"
 
 
 class TestFrTwoReports:
@@ -195,7 +211,7 @@ class TestFrTwoReports:
         )
         assert ctx["suspected_family"] == "map-filter"
         assert "map-filter" in ctx["spec_file"]
-        assert ctx["database_name"] == "frtwo_e2e_slot0"
+        assert ctx["database_name"] == "frtwo"
 
 
 class TestFrTwoFamilies:

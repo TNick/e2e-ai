@@ -26,6 +26,7 @@ def render_fr_two_compose_override(
             "E2E_DATABASE_URL": slot.database_url(),
             "POSTGRES_DB": slot.database_name,
             "POSTGRES_USER": slot.database_user,
+            "POSTGRES_PASSWORD": slot.database_password,
         }
         services[f"frtwo-backend-{slot.id}"] = {
             "extends": {"service": "backend"},

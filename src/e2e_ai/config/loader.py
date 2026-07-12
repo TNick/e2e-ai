@@ -26,6 +26,7 @@ from .models import (
     EffectiveConfig,
     FullVerificationConfig,
     IsolationConfig,
+    MonitorConfig,
     PlaywrightConfig,
     PlaywrightReportEnv,
     PostgresIsolationConfig,
@@ -583,6 +584,22 @@ def _parse_project_config(data: Mapping[str, object]) -> ProjectConfig:
         playwright_mcp=_parse_playwright_mcp(data.get("playwright_mcp")),
         target=_parse_target_config(data.get("target")),
         target_runtime=_parse_target_runtime(data.get("target_runtime")),
+        monitor=_parse_monitor_config(data.get("monitor")),
+    )
+
+
+def _parse_monitor_config(data: object) -> MonitorConfig:
+    if data is None:
+        return MonitorConfig()
+    mapping = _require_mapping(data, "monitor")
+    defaults = MonitorConfig()
+    port = mapping.get("port", defaults.port)
+    refresh = mapping.get("refresh_ms", defaults.refresh_ms)
+    return MonitorConfig(
+        host=str(mapping.get("host", defaults.host)),
+        port=int(port),
+        refresh_ms=int(refresh),
+        open_browser=bool(mapping.get("open", mapping.get("open_browser", False))),
     )
 
 
@@ -681,6 +698,7 @@ def merge_config(
         playwright_mcp=project_config.playwright_mcp,
         target=project_config.target,
         target_runtime=project_config.target_runtime,
+        monitor=project_config.monitor,
         project_config_path=project_config_path,
         user_config_path=user_config_path,
     )

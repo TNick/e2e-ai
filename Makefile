@@ -1,11 +1,13 @@
 .PHONY: help init init-d lint delint test pre-commit pre-commit-install \
-	pre-commit-run format check
+	pre-commit-run format check monitor-ui-install monitor-ui-build
 
 PYTHON ?= python
 PIP ?= $(PYTHON) -m pip
 PYTEST ?= $(PYTHON) -m pytest
 RUFF ?= $(PYTHON) -m ruff
 PRE_COMMIT ?= $(PYTHON) -m pre_commit
+NPM ?= npm
+MONITOR_UI_DIR ?= monitor-ui
 
 help:
 	@echo "e2e-ai development commands"
@@ -47,3 +49,12 @@ pre-commit:
 	$(PRE_COMMIT) run --show-diff-on-failure --all-files
 
 check: lint test
+
+# Monitor UI (Node is only needed to *build* the UI, never to run e2e-ai).
+monitor-ui-install:
+	cd $(MONITOR_UI_DIR) && $(NPM) install
+
+# Builds the Vite/React/MUI source and copies the bundle into the wheel's
+# static assets at src/e2e_ai/monitor/static/.
+monitor-ui-build:
+	cd $(MONITOR_UI_DIR) && $(NPM) run build
