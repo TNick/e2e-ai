@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-12
+
+### Changed
+
+- Added extra dependency: httpx
+
 ## [0.1.2] - 2026-07-12
 
 ### Changed
@@ -83,4 +89,5 @@ All notable changes to this project will be documented in this file.
 
 [0.1.1]: https://github.com/TNick/e2e-ai/compare/0816d060c8d69ee8f8a0b9fd374f6ac9a8248212...v0.1.1
 [0.1.2]: https://github.com/TNick/e2e-ai/compare/v0.1.1...v0.1.2
-[unreleased]: https://github.com/TNick/e2e-ai/compare/v0.1.2...HEAD
+[0.1.3]: https://github.com/TNick/e2e-ai/compare/v0.1.2...v0.1.3
+[unreleased]: https://github.com/TNick/e2e-ai/compare/v0.1.3...HEAD
