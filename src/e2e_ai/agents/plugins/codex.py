@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 from ...config.models import AgentConfig, RoutingConfig
+from ...mcp.models import AgentMcpAttachment
 from ..capabilities import QUOTA_READY, AgentResult
 from ..quota import QuotaSnapshot
 from ..schemas import (
@@ -30,18 +33,58 @@ def build_exec_argv(
     schema_path: Path | None = None,
     approval: str | None = None,
     profile_args: list[str] | None = None,
+    mcp_profile: str | None = None,
 ) -> list[str]:
     """Build argv for ``codex exec`` with sandbox and optional schema file."""
 
-    argv = [executable, "exec", "--json"]
+    if os.name == "nt" and sandbox == "workspace-write":
+        sandbox = "danger-full-access"
+
+    argv = [executable, "exec", "--json", "--ignore-user-config"]
     if schema_path is not None:
         argv.extend(["--output-schema", str(schema_path)])
     argv.extend(["--sandbox", sandbox])
+    # Codex accepts approval policy only as a config override on ``exec``,
+    # not via the global ``--ask-for-approval`` flag after the subcommand.
     if approval is not None:
-        argv.extend(["--ask-for-approval", approval])
+        argv.extend(["-c", f"approval_policy={approval}"])
+    if mcp_profile is not None:
+        argv.extend(["-p", mcp_profile])
     if profile_args:
         argv.extend(profile_args)
     return argv
+
+
+def prepare_codex_mcp_runtime(
+    mcp: AgentMcpAttachment | None,
+    *,
+    log_dir: Path | None,
+    env: dict[str, str],
+) -> tuple[dict[str, str], str | None, list[Path]]:
+    """Return env overrides and profile name for one Playwright MCP session."""
+
+    if mcp is None or not mcp.enabled or mcp.client_config_path is None:
+        return env, None, []
+    if log_dir is None:
+        return env, None, []
+
+    session_id = mcp.session.session_id if mcp.session is not None else "mcp"
+    runtime_home = log_dir / f"codex-home-{session_id}"
+    runtime_home.mkdir(parents=True, exist_ok=True)
+    cleanup_paths = [runtime_home]
+
+    real_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    auth_src = real_home / "auth.json"
+    auth_dst = runtime_home / "auth.json"
+    if auth_src.is_file() and not auth_dst.exists():
+        shutil.copy2(auth_src, auth_dst)
+
+    profile_name = f"e2e-ai-mcp-{session_id.replace('_', '-')}"
+    profile_dst = runtime_home / f"{profile_name}.config.toml"
+    shutil.copy2(mcp.client_config_path, profile_dst)
+
+    run_env = {**env, "CODEX_HOME": str(runtime_home)}
+    return run_env, profile_name, cleanup_paths
 
 
 def _profile_args(profile: str | None) -> list[str]:
@@ -97,12 +140,23 @@ class CodexAgent(BaseCLIPlugin):
 
         schema_path = write_schema_file(schema) if schema is not None else None
         cleanup = [schema_path] if schema_path is not None else None
+        mcp = getattr(request, "mcp", None)
+        run_env, mcp_profile, mcp_cleanup = prepare_codex_mcp_runtime(
+            mcp,
+            log_dir=request.log_dir,
+            env=self._run_env(),
+        )
+        if cleanup is None:
+            cleanup = list(mcp_cleanup)
+        else:
+            cleanup = [*cleanup, *mcp_cleanup]
         argv = build_exec_argv(
             self.executable,
             sandbox=sandbox,
             schema_path=schema_path,
             approval=approval,
             profile_args=_profile_args(request.profile),
+            mcp_profile=mcp_profile,
         )
         snap = self.quota(quota_task)
         return invoke_argv(
@@ -111,7 +165,7 @@ class CodexAgent(BaseCLIPlugin):
             cwd=request.work_dir,
             prompt=request.prompt,
             transport=self.prompt_transport,
-            env=self._run_env(),
+            env=run_env,
             timeout_seconds=request.timeout_seconds,
             log_dir=request.log_dir,
             quota_before=snap.state,

@@ -16,6 +16,7 @@ from .invocation import (
     EXIT_TASK_FAILURE,
     EXIT_TIMEOUT,
     EXIT_TRANSIENT_CAPACITY,
+    classify_agent_exit,
 )
 
 EXIT_EMPTY_OUTPUT = "empty_output"
@@ -64,8 +65,6 @@ def classify_invocation_exit(
 
     if noop_implementation:
         return EXIT_NOOP_IMPLEMENTATION
-    if run.exit_class:
-        return run.exit_class
     require_schema = config.routing.planner_requires_schema and role in {
         "planner",
         "instrumenter",
@@ -74,10 +73,17 @@ def classify_invocation_exit(
         stripped = plan_text.strip()
         if not stripped or stripped.startswith("(agent produced no output"):
             return EXIT_EMPTY_OUTPUT
-    if not run.ok and not run.stdout.strip():
+    if run.ok:
+        return None
+    derived = classify_agent_exit(run.exit_code, run.stdout, run.stderr)
+    if run.exit_class and run.exit_class not in {None, EXIT_TASK_FAILURE}:
+        return run.exit_class
+    if derived != EXIT_TASK_FAILURE:
+        return derived
+    if run.exit_class:
+        return run.exit_class
+    if not run.stdout.strip():
         return EXIT_EMPTY_OUTPUT
-    if not run.ok:
-        return EXIT_TASK_FAILURE
     return EXIT_TASK_FAILURE
 
 

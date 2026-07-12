@@ -3,12 +3,12 @@ repos:
     hooks:
       - id: ruff-check
         name: ruff check
-        entry: python -m ruff check src tests
+        entry: python -m ruff check --fix src tests
         language: system
         types: [python]
       - id: ruff-format
         name: ruff format
-        entry: python -m ruff format --check src tests
+        entry: python -m ruff format src tests
         language: system
         types: [python]
       - id: pytest

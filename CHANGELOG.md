@@ -31,6 +31,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Monitor agent detail drawer formats Codex ``--json`` stdout as one card per
+  item, expands ``\\r\\n`` / ``\\n`` in command output, pretty-prints nested
+  planner JSON, and collapses long ``aggregated_output`` blocks.
 - Repair loop prints prior attempt history as ``(N runs, M failures)`` when a
   test has been executed before (replacing the misleading ``(regression)`` /
   ``(seen before)`` labels).
@@ -42,6 +45,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Successful agent invocations no longer show a misleading failover exit class
+  (for example `quota_error`) when agent logs mention rate limits or usage caps
+  but the process exited cleanly with status `ok`.
+- Monitor Agents list: status cells now use green for `ok` and red for `error`,
+  matching runs/tests coloring.
 - `e2e-ai repair --failed-only` now ignores previous empty bookkeeping runs and
   no longer creates a new empty run when there are no failed tests to schedule.
 - Repair attempt budgets now apply to the current run, so historical failures
@@ -55,6 +63,35 @@ All notable changes to this project will be documented in this file.
   output is enabled: JSON Schema is written to a temporary file for
   ``codex exec --output-schema`` instead of passing inline JSON (which Codex
   treats as a file path).
+- Codex instrumenter/implementer invocations no longer fail with
+  ``unexpected argument '--ask-for-approval'``: approval policy is passed
+  via ``-c approval_policy=...`` because current Codex CLI rejects the flag
+  after ``exec``.
+- Codex repair invocations use ``--ignore-user-config`` so personal MCP
+  servers from ``~/.codex/config.toml`` do not load during unattended runs;
+  Playwright MCP is layered through a per-invocation Codex profile instead.
+- Provider failover now re-classifies agent output when a stored exit class
+  is the generic ``task_failure``, so Codex usage-limit responses rotate to
+  the next configured provider (for example Claude) instead of stopping.
+- Logged-in agents with an unknown quota are now eligible as failover targets
+  after a provider reports quota exhaustion.
+- Claude planner, instrumenter, and implementer invocations now include
+  ``--verbose``, as required by Claude CLI when using ``stream-json`` output.
+- Cursor now receives repair prompts through stdin, avoiding Windows command
+  length failures for large failure packets and agent context.
+- When every planner provider exhausts its quota, repairs now stop as blocked
+  after the current failed test execution rather than rerunning unchanged code
+  and consuming the remaining repair-attempt budget.
+- Oversized planner output is compacted before it is embedded in implementer
+  prompts, preventing Codex from rejecting repair requests over its 1MiB input
+  limit.
+- Codex write-capable invocations on Windows use full access after the native
+  workspace-write and unelevated sandboxes reject required file edits; planner
+  invocations remain read-only.
+- Agent log files include a millisecond suffix so concurrent invocations no
+  longer overwrite each other's stdout logs.
+- Codex Playwright-MCP runtime directories are now removed as directories on
+  Windows, preventing repair runs from crashing during temporary-file cleanup.
 - Repair loop no longer crashes with an invalid `planning` → `rerun` state
   transition when the planner agent fails after failover.
 - Monitor UI closes the detail drawer when navigating to a different page, so

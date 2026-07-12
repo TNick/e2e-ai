@@ -1,4 +1,4 @@
-"""Tests for the state monitor: store, commands, launcher, API, and CLI wiring."""
+"""Tests for the state monitor: store, commands, launcher, API, CLI."""
 
 from __future__ import annotations
 
@@ -12,13 +12,17 @@ import pytest
 
 from e2e_ai.db.migrations import ensure_database
 from e2e_ai.monitor import build_argv, command_schema
-from e2e_ai.monitor.commands import COMMANDS, CommandValidationError, get_command
+from e2e_ai.monitor.commands import (
+    COMMANDS,
+    CommandValidationError,
+    get_command,
+)
 from e2e_ai.monitor.processes import ProcessManager
 from e2e_ai.monitor.server import build_monitor, monitor_extra_available
 from e2e_ai.monitor.store import MonitorError, MonitorStore
 
-# The monitor web server needs the optional ``monitor`` extra (fastapi/uvicorn);
-# CI installs only the base + dev deps, so skip those tests when it is absent.
+# The monitor web server needs the optional ``monitor`` extra
+# (fastapi/uvicorn); CI installs only base + dev deps, so skip when absent.
 requires_monitor = pytest.mark.skipif(
     not monitor_extra_available(),
     reason='monitor extra not installed (pip install "e2e-ai[monitor]")',
@@ -33,8 +37,8 @@ def _seed(db_path: Path) -> None:
     conn = ensure_database(db_path)
     now = _now()
     conn.execute(
-        "INSERT INTO projects (id, root_path, config_hash, created_at, updated_at)"
-        " VALUES ('demo','/r','h',?,?)",
+        "INSERT INTO projects (id, root_path, config_hash, created_at,"
+        " updated_at) VALUES ('demo','/r','h',?,?)",
         (now, now),
     )
     conn.execute(
@@ -50,25 +54,27 @@ def _seed(db_path: Path) -> None:
     )
     # One finished attempt, two unfinished on different environments.
     conn.execute(
-        "INSERT INTO attempts (id, run_id, test_id, attempt_index, status, work_dir,"
-        " environment_id, database_name, started_at, finished_at, exit_code) VALUES"
+        "INSERT INTO attempts (id, run_id, test_id, attempt_index, status,"
+        " work_dir, environment_id, database_name, started_at, finished_at,"
+        " exit_code) VALUES"
         " ('a0','run1','t1',0,'failed','w','env-a','db_a',?,?,1)",
         (now, now),
     )
     conn.execute(
-        "INSERT INTO attempts (id, run_id, test_id, attempt_index, status, work_dir,"
-        " environment_id, database_name, started_at) VALUES"
+        "INSERT INTO attempts (id, run_id, test_id, attempt_index, status,"
+        " work_dir, environment_id, database_name, started_at) VALUES"
         " ('a1','run1','t1',1,'running','w','env-a','db_a',?)",
         (now,),
     )
     conn.execute(
-        "INSERT INTO attempts (id, run_id, test_id, attempt_index, status, work_dir,"
-        " started_at) VALUES ('a2','run1','t1',2,'running','w',?)",
+        "INSERT INTO attempts (id, run_id, test_id, attempt_index, status,"
+        " work_dir, started_at) VALUES ('a2','run1','t1',2,'running','w',?)",
         (now,),
     )
     conn.execute(
-        "INSERT INTO failure_packets (id, attempt_id, signature, error_message,"
-        " payload_json, created_at) VALUES ('fp1','a0','sig','boom',?,?)",
+        "INSERT INTO failure_packets (id, attempt_id, signature,"
+        " error_message, payload_json, created_at) VALUES"
+        " ('fp1','a0','sig','boom',?,?)",
         (json.dumps({"suspected_family": "assertion"}), now),
     )
     conn.execute(
@@ -169,7 +175,9 @@ class TestCommands:
 
     def test_build_argv_repeatable_report(self):
         argv = build_argv(
-            "verify", {"report": ["r1.json", "r2.json"]}, python_executable="PY"
+            "verify",
+            {"report": ["r1.json", "r2.json"]},
+            python_executable="PY",
         )
         assert argv.count("--report") == 2
 
@@ -199,6 +207,7 @@ class TestLauncher:
         run_id = pm.launch(run, argv)
 
         # Wait for the watcher thread to record completion.
+        status = None
         for _ in range(50):
             status = pm.get_run(run_id)
             if status and status.get("status") == "exited":
@@ -212,6 +221,7 @@ class TestLauncher:
         command = json.loads((run_dir / "command.json").read_text())
         assert command["started_by"] == "local-ui"
         assert command["argv"] == argv  # argv list, no shell string
+        assert status is not None
         assert status["status"] == "exited" and status["exit_code"] == 0
         assert "hello from launcher" in pm.read_output(run_id)
 
@@ -285,7 +295,8 @@ class TestApi:
 
         detail = client.get("/api/agents/ai1").json()
         assert detail["role"] == "planner"
-        assert detail["repair_plan"]["plan_text"].startswith("1. Fix the login")
+        plan_text = detail["repair_plan"]["plan_text"]
+        assert plan_text.startswith("1. Fix the login")
         assert detail["repair_plan"]["outcome"] == "failed"
         assert "Fix the login button" in detail["stdout"]
         assert detail["test"]["title"] == "logs in"
@@ -331,9 +342,10 @@ class TestApi:
         # Patch the process manager the app was built with.
         from e2e_ai.monitor import processes as proc_mod
 
-        monkeypatch.setattr(
-            proc_mod.ProcessManager, "launch", lambda self, c, a: fake_launch(c, a)
-        )
+        def _launch(self, command, argv):
+            return fake_launch(command, argv)
+
+        monkeypatch.setattr(proc_mod.ProcessManager, "launch", _launch)
         resp = client.post("/api/commands/discover/runs", json={"options": {}})
         assert resp.status_code == 200
         assert resp.json()["command_run_id"] == "run-xyz"
@@ -342,7 +354,8 @@ class TestApi:
 
     def test_start_command_rejects_unknown(self, tmp_path):
         client, _ = _client(tmp_path)
-        assert client.post("/api/commands/evil/runs", json={}).status_code == 400
+        resp = client.post("/api/commands/evil/runs", json={})
+        assert resp.status_code == 400
 
     def test_events_emits_state_changed(self, tmp_path):
         client, _ = _client(tmp_path)
@@ -439,16 +452,26 @@ class TestMonitorConfig:
 
     def test_ui_uses_config_host_port(self, tmp_path, monkeypatch):
         proj, db = self._project(
-            tmp_path, "monitor: {host: 127.0.0.1, port: 9222, refresh_ms: 250}\n"
+            tmp_path,
+            "monitor: {host: 127.0.0.1, port: 9222, refresh_ms: 250}\n",
         )
-        cap = self._run_ui(tmp_path, ["--project-root", str(proj)], monkeypatch)
+        cap = self._run_ui(
+            tmp_path,
+            ["--project-root", str(proj)],
+            monkeypatch,
+        )
         assert cap["port"] == 9222
         assert cap["refresh_ms"] == 250
 
     def test_ui_flag_overrides_config(self, tmp_path, monkeypatch):
-        proj, db = self._project(tmp_path, "monitor: {host: 127.0.0.1, port: 9222}\n")
+        proj, db = self._project(
+            tmp_path,
+            "monitor: {host: 127.0.0.1, port: 9222}\n",
+        )
         cap = self._run_ui(
-            tmp_path, ["--project-root", str(proj), "--port", "9333"], monkeypatch
+            tmp_path,
+            ["--project-root", str(proj), "--port", "9333"],
+            monkeypatch,
         )
         assert cap["port"] == 9333
 
@@ -475,7 +498,10 @@ class TestConfigEndpoint:
             host="127.0.0.1",
             port=8765,
             refresh_ms=1000,
-            config_full={"project_id": "demo", "isolation": {"backend": "none"}},
+            config_full={
+                "project_id": "demo",
+                "isolation": {"backend": "none"},
+            },
         )
         data = TestClient(app).get("/api/config").json()
         assert data["available"] is True

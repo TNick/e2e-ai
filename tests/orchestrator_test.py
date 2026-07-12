@@ -35,7 +35,11 @@ from e2e_ai.orchestrator.models import (
     STATE_REGRESSED,
     STATE_RUNNING,
 )
-from e2e_ai.orchestrator.prompts import build_planner_prompt
+from e2e_ai.orchestrator.prompts import (
+    MAX_IMPLEMENTER_PLAN_CHARS,
+    _truncate_implementer_plan,
+    build_planner_prompt,
+)
 from e2e_ai.orchestrator.state_machine import (
     EVENT_FAIL,
     EVENT_INSTRUMENT,
@@ -580,6 +584,18 @@ class TestDockerStartupMessages:
         assert "old plan that failed" in prompt
         assert "FAILED PLAN" in prompt
         conn.close()
+
+
+class TestImplementerPromptSizing:
+    def test_truncates_oversized_plan_with_head_and_tail(self) -> None:
+        plan = "start\n" + ("x" * (MAX_IMPLEMENTER_PLAN_CHARS + 1)) + "\nend"
+
+        compact = _truncate_implementer_plan(plan)
+
+        assert len(compact) <= MAX_IMPLEMENTER_PLAN_CHARS + 100
+        assert compact.startswith("start\n")
+        assert compact.endswith("\nend")
+        assert "plan characters omitted" in compact
 
 
 class TestTestHistory:

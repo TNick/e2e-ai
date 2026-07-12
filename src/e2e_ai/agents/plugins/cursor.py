@@ -60,7 +60,7 @@ class CursorAgent(BaseCLIPlugin):
     login_argv = ("status", "--format", "json")
     quota_method = "unknown"
     quota_confidence = "low"
-    prompt_transport = "argument"
+    prompt_transport = "stdin"
     supports_mcp = True
     supports_runtime_mcp_config = True
 

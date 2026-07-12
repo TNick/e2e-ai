@@ -10,6 +10,24 @@ from ..config import EffectiveConfig
 from ..config.target import resolve_surface_path
 from ..inventory.models import DiscoveredTest
 
+MAX_IMPLEMENTER_PLAN_CHARS = 200_000
+
+
+def _truncate_implementer_plan(plan: str) -> str:
+    """Keep a large plan within the downstream agent input budget."""
+
+    if len(plan) <= MAX_IMPLEMENTER_PLAN_CHARS:
+        return plan
+
+    head_chars = 20_000
+    tail_chars = MAX_IMPLEMENTER_PLAN_CHARS - head_chars
+    omitted_chars = len(plan) - MAX_IMPLEMENTER_PLAN_CHARS
+    return (
+        plan[:head_chars]
+        + f"\n\n[... {omitted_chars} plan characters omitted ...]\n\n"
+        + plan[-tail_chars:]
+    )
+
 
 def _packet_json(context: RepairContext) -> str:
     packet = context.packet
@@ -202,13 +220,14 @@ def build_implementer_prompt(
     packet = context.packet
     spec_file = test.spec_file if test is not None else packet.spec_file
     title = test.title if test is not None else packet.test_title
+    compact_plan = _truncate_implementer_plan(plan)
 
     files_hint = ""
-    for line in plan.splitlines():
+    for line in compact_plan.splitlines():
         if ".ts" in line or ".py" in line or ".js" in line:
             files_hint = (
                 "Files mentioned in the plan (inspect and change only as needed):\n"
-                + plan
+                + compact_plan
             )
             break
 
@@ -246,7 +265,7 @@ def build_implementer_prompt(
             title,
             _target_scope_block(config),
             files_hint,
-            plan.strip(),
+            compact_plan.strip(),
         )
     ).strip() + "\n"
 

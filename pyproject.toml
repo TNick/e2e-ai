@@ -67,3 +67,8 @@ extend-immutable-calls = [
     "fastapi.Path",
     "fastapi.Depends",
 ]
+
+[tool.pyright]
+venvPath = "."
+venv = "venv"
+pythonVersion = "3.12"

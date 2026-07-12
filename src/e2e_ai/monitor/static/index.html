@@ -36,9 +36,9 @@
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
   .pill { padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border); }
-  .s-passed, .s-passing, .s-exited0 { color: var(--ok); }
-  .s-failed, .s-failing, .s-failed_to_start { color: var(--fail); }
-  .s-running, .s-blocked { color: var(--run); }
+  .s-passed, .s-passing, .s-exited0, .s-ok { color: var(--ok); }
+  .s-failed, .s-failing, .s-failed_to_start, .s-error { color: var(--fail); }
+  .s-running, .s-blocked, .s-interrupted { color: var(--run); }
   .muted { color: var(--muted); }
   button { background: var(--accent); color: #fff; border: 0; border-radius: 4px; padding: 6px 12px; cursor: pointer; }
   button.secondary { background: #2a2f3a; }
@@ -70,6 +70,24 @@
   .cfg .ckey { color: var(--muted); }
   .cfg .cval { color: var(--text); }
   .cfg .node { margin-left: 12px; border-left: 1px solid var(--border); padding-left: 8px; }
+  .codex-log { display: flex; flex-direction: column; gap: 8px; }
+  .codex-preamble { color: var(--muted); font-size: 12px; white-space: pre-wrap; }
+  .codex-meta { font-size: 12px; color: var(--muted); padding: 4px 0; }
+  .codex-item { margin: 0; padding: 10px; }
+  .codex-item-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .codex-item-head .id { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+  .codex-cmd { font-family: ui-monospace, monospace; font-size: 11px;
+    background: #0b0d12; border: 1px solid var(--border); border-radius: 4px;
+    padding: 8px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; }
+  .codex-out { margin-top: 8px; }
+  .codex-out summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
+  .codex-out pre { margin-top: 6px; max-height: 420px; }
+  .codex-field { margin: 6px 0; }
+  .codex-label { color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .03em; margin-bottom: 2px; }
+  .codex-field ul { margin: 4px 0 0 18px; padding: 0; }
+  .codex-field li { margin: 2px 0; }
+  .codex-msg { white-space: pre-wrap; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -105,6 +123,194 @@ async function api(path, opts) {
 const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const local = (t) => t ? `<span title="${esc(t)}">${new Date(t).toLocaleString()}</span>` : "—";
 const scls = (s) => "s-" + String(s ?? "").toLowerCase();
+
+// Expand literal escape sequences still embedded in display text.
+function normalizeDisplayText(text) {
+  if (text == null || text === "") return "";
+  return String(text)
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
+// Detect Codex ``codex exec --json`` JSONL streams in agent stdout.
+function isCodexJsonl(text) {
+  const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return false;
+  let hits = 0;
+  for (const line of lines) {
+    if (!line.startsWith("{")) continue;
+    try {
+      const obj = JSON.parse(line);
+      const t = obj && obj.type;
+      if (typeof t === "string" && /^(thread|turn|item)\./.test(t)) hits++;
+    } catch { /* not JSON */ }
+  }
+  return hits >= 2;
+}
+
+function parseCodexStream(text) {
+  const preamble = [];
+  const events = [];
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!line.startsWith("{")) {
+      preamble.push(line);
+      continue;
+    }
+    try {
+      events.push(JSON.parse(line));
+    } catch {
+      preamble.push(line);
+    }
+  }
+  return { preamble, events };
+}
+
+function codexItemRecords(events) {
+  const order = [];
+  const byId = new Map();
+  const meta = [];
+  for (const ev of events) {
+    const t = ev && ev.type;
+    if (typeof t !== "string" || !t.startsWith("item.")) {
+      meta.push(ev);
+      continue;
+    }
+    const item = ev.item || {};
+    const id = item.id || `item-${order.length}`;
+    if (!byId.has(id)) {
+      byId.set(id, { id, item: { ...item } });
+      order.push(id);
+    } else {
+      Object.assign(byId.get(id).item, item);
+    }
+    const rec = byId.get(id);
+    if (t === "item.started") rec.started = true;
+    if (t === "item.completed") rec.completed = true;
+  }
+  return { meta, items: order.map((id) => byId.get(id)) };
+}
+
+function renderCodexPlanFields(obj) {
+  const sections = [
+    ["Summary", obj.summary],
+    ["Root cause", obj.root_cause_hypothesis],
+    ["Files to inspect", obj.files_to_inspect],
+    ["Files to change", obj.files_to_change],
+    ["Steps", obj.steps],
+    ["Risks", obj.risks],
+    ["Verification", obj.verification_commands],
+    ["Blockers", obj.external_blocker_signals],
+  ];
+  const html = sections.map(([label, value]) => {
+    if (value == null) return "";
+    if (Array.isArray(value)) {
+      if (!value.length) return "";
+      return `<div class="codex-field"><div class="codex-label">${esc(label)}</div><ul>${
+        value.map((entry) => `<li>${esc(typeof entry === "string" ? entry : JSON.stringify(entry))}</li>`).join("")
+      }</ul></div>`;
+    }
+    const text = String(value).trim();
+    if (!text) return "";
+    return `<div class="codex-field"><div class="codex-label">${esc(label)}</div>`
+      + `<div class="codex-msg">${esc(normalizeDisplayText(text))}</div></div>`;
+  }).filter(Boolean).join("");
+  return html || `<pre>${esc(normalizeDisplayText(JSON.stringify(obj, null, 2)))}</pre>`;
+}
+
+function renderCodexItemBody(item) {
+  const type = item.type || "item";
+  if (type === "agent_message") {
+    const text = normalizeDisplayText(item.text || "");
+    if (!text) return '<div class="muted">(empty message)</div>';
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return renderCodexPlanFields(parsed);
+      }
+    } catch { /* plain text */ }
+    return `<div class="codex-msg">${esc(text)}</div>`;
+  }
+  if (type === "command_execution") {
+    const cmd = normalizeDisplayText(item.command || "");
+    const out = normalizeDisplayText(item.aggregated_output || "");
+    const status = item.status || (item.exit_code == null ? "in_progress" : "completed");
+    let body = "";
+    if (cmd) body += `<div class="codex-cmd">${esc(cmd)}</div>`;
+    if (out) {
+      const label = `Output (${out.length.toLocaleString()} chars`
+        + `${item.exit_code != null ? `, exit ${item.exit_code}` : ""})`;
+      body += `<details class="codex-out"${out.length < 2400 ? " open" : ""}>`
+        + `<summary>${esc(label)}</summary><pre>${esc(out)}</pre></details>`;
+    } else if (status === "in_progress") {
+      body += '<div class="muted">Running…</div>';
+    }
+    return body || '<div class="muted">(no command output)</div>';
+  }
+  const dump = normalizeDisplayText(JSON.stringify(item, null, 2));
+  return `<pre>${esc(dump)}</pre>`;
+}
+
+function renderCodexItemCard(rec) {
+  const item = rec.item || {};
+  const type = item.type || "item";
+  const status = item.status
+    || (rec.completed ? "completed" : rec.started ? "in_progress" : "pending");
+  const statusCls = status === "completed" && item.exit_code === 0 ? "s-ok"
+    : status === "completed" && item.exit_code != null && item.exit_code !== 0 ? "s-failed"
+    : status === "failed" ? "s-failed"
+    : status === "in_progress" ? "s-running"
+    : "muted";
+  return `<div class="card codex-item">
+    <div class="codex-item-head">
+      <span class="pill">${esc(type)}</span>
+      <span class="id">${esc(rec.id)}</span>
+      <span class="pill ${statusCls}">${esc(status)}</span>
+      ${item.exit_code != null ? `<span class="muted">exit ${esc(item.exit_code)}</span>` : ""}
+    </div>
+    ${renderCodexItemBody(item)}
+  </div>`;
+}
+
+function renderCodexMetaEvent(ev) {
+  const t = ev.type || "event";
+  if (t === "thread.started") {
+    return `<div class="codex-meta">Thread started · ${esc(ev.thread_id || "—")}</div>`;
+  }
+  if (t === "turn.started") return '<div class="codex-meta">Turn started</div>';
+  if (t === "turn.completed") {
+    const usage = ev.usage && typeof ev.usage === "object"
+      ? ` · tokens in/out: ${esc(ev.usage.input_tokens ?? "—")}/${esc(ev.usage.output_tokens ?? "—")}`
+      : "";
+    return `<div class="codex-meta">Turn completed${usage}</div>`;
+  }
+  return `<div class="codex-meta">${esc(t)}</div>`;
+}
+
+function renderCodexLog(text) {
+  const { preamble, events } = parseCodexStream(text);
+  if (!events.length) return `<pre>${esc(normalizeDisplayText(text))}</pre>`;
+  const { meta, items } = codexItemRecords(events);
+  const parts = ['<div class="codex-log">'];
+  if (preamble.length) {
+    parts.push(`<div class="codex-preamble">${esc(normalizeDisplayText(preamble.join("\n")))}</div>`);
+  }
+  for (const ev of meta) parts.push(renderCodexMetaEvent(ev));
+  for (const rec of items) parts.push(renderCodexItemCard(rec));
+  parts.push("</div>");
+  return parts.join("");
+}
+
+function renderAgentLog(text, agentId) {
+  const raw = String(text || "");
+  if (!raw.trim()) return "";
+  if (agentId === "codex" || isCodexJsonl(raw)) return renderCodexLog(raw);
+  return `<pre>${esc(normalizeDisplayText(raw))}</pre>`;
+}
 
 // Compare two cell values by column type. Dates/date-times compare by their
 // underlying value (parsed timestamp), never by the displayed string.
@@ -489,7 +695,8 @@ async function showAgent(id) {
       + ` · Run: <a data-run="${esc(a.run_id)}">${esc(a.run_id)}</a></div>`;
   }
   if (a.repair_plan) {
-    body += `<h3>Repair plan</h3><pre>${esc(a.repair_plan.plan_text)}</pre>`;
+    const planHtml = renderAgentLog(a.repair_plan.plan_text, a.agent_id);
+    body += `<h3>Repair plan</h3>${planHtml}`;
     if (a.repair_plan.outcome) {
       body += `<div class="muted">Outcome: ${esc(a.repair_plan.outcome)}</div>`;
     }
@@ -500,11 +707,11 @@ async function showAgent(id) {
   const logLabel = a.role === "implementer" ? "Implementation log"
     : a.role === "instrumenter" ? "Instrumentation plan"
     : showLog ? "Agent log" : "";
-  if (showLog && logLabel) body += `<h3>${logLabel}</h3><pre>${esc(a.stdout)}</pre>`;
+  if (showLog && logLabel) body += `<h3>${logLabel}</h3>${renderAgentLog(a.stdout, a.agent_id)}`;
   else if (!a.repair_plan && stdoutText) {
-    body += `<h3>${logLabel || "Output"}</h3><pre>${esc(a.stdout)}</pre>`;
+    body += `<h3>${logLabel || "Output"}</h3>${renderAgentLog(a.stdout, a.agent_id)}`;
   }
-  if (a.stderr) body += `<h3>Stderr</h3><pre>${esc(a.stderr)}</pre>`;
+  if (a.stderr) body += `<h3>Stderr</h3>${renderAgentLog(a.stderr, a.agent_id)}`;
   if (!a.repair_plan && !stdoutText && !a.stderr) {
     body += '<div class="muted" style="margin-top:8px">No output recorded.</div>';
   }
@@ -607,7 +814,8 @@ async function showOutput(id) {
     ]);
     openDrawer("Command run " + esc(id),
       `<div class="muted">${esc(r.command_id)} · <span class="${scls(r.status)}">${esc(r.status)}</span>
-        · exit ${esc(r.exit_code ?? "—")}</div><pre>${esc(out.output || "(no output yet)")}</pre>`);
+        · exit ${esc(r.exit_code ?? "—")}</div>${
+        renderAgentLog(out.output || "(no output yet)", null)}`);
     if (r.status === "running") outTimer = setTimeout(draw, 1000);
   };
   draw();

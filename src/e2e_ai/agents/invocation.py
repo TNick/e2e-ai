@@ -112,23 +112,23 @@ def classify_agent_exit(
 
     if exit_code == 124:
         return EXIT_TIMEOUT
-    text = "\n".join((stdout, stderr))
-    for pattern in _AUTH_PATTERNS:
-        if pattern.search(text):
-            return EXIT_AUTH_ERROR
-    for pattern in _QUOTA_PATTERNS:
-        if pattern.search(text):
-            return EXIT_QUOTA_ERROR
-    for pattern in _MODEL_PATTERNS:
-        if pattern.search(text):
-            return EXIT_MODEL_UNAVAILABLE
-    for pattern in _TRANSIENT_PATTERNS:
-        if pattern.search(text):
-            return EXIT_TRANSIENT_CAPACITY
-    for pattern in _CONFIG_PATTERNS:
-        if pattern.search(text):
-            return EXIT_MISCONFIGURED
     if exit_code != 0:
+        text = "\n".join((stdout, stderr))
+        for pattern in _AUTH_PATTERNS:
+            if pattern.search(text):
+                return EXIT_AUTH_ERROR
+        for pattern in _QUOTA_PATTERNS:
+            if pattern.search(text):
+                return EXIT_QUOTA_ERROR
+        for pattern in _MODEL_PATTERNS:
+            if pattern.search(text):
+                return EXIT_MODEL_UNAVAILABLE
+        for pattern in _TRANSIENT_PATTERNS:
+            if pattern.search(text):
+                return EXIT_TRANSIENT_CAPACITY
+        for pattern in _CONFIG_PATTERNS:
+            if pattern.search(text):
+                return EXIT_MISCONFIGURED
         return EXIT_TASK_FAILURE
     return EXIT_TASK_FAILURE
 

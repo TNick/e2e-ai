@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -59,6 +60,15 @@ def write_schema_file(schema: dict[str, object]) -> Path:
     return path
 
 
+def remove_temporary_path(path: Path) -> None:
+    """Remove a temporary file or directory."""
+
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def invoke_argv(
     agent_id: str,
     argv: Sequence[str],
@@ -105,7 +115,8 @@ def invoke_argv(
     if log_dir is not None:
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        output_path = log_dir / (f"{agent_id}-{stamp}.log")
+        suffix = f"{int(time.time() * 1000) % 100000:05d}"
+        output_path = log_dir / (f"{agent_id}-{stamp}-{suffix}.log")
 
     stdout_path = output_path or (cwd / ".e2e-ai-agent-stdout.log")
     stderr_path = stdout_path
@@ -124,7 +135,7 @@ def invoke_argv(
             tmp_file.unlink(missing_ok=True)
         if cleanup_paths is not None:
             for path in cleanup_paths:
-                path.unlink(missing_ok=True)
+                remove_temporary_path(path)
 
     text = ""
     if stdout_path.is_file():

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 from attrs import evolve
 
+from e2e_ai.agents.base import AgentPlugin
 from e2e_ai.agents.invocation import EXIT_AUTH_ERROR, EXIT_QUOTA_ERROR
-from e2e_ai.agents.registry import create_agent_plugins
-from e2e_ai.agents.router import provider_pool, select_provider
+from e2e_ai.agents.registry import AgentRegistry, create_agent_plugins
+from e2e_ai.agents.router import _score_candidate, provider_pool, select_provider
 from e2e_ai.agents.routing_outcomes import (
     EXIT_EMPTY_OUTPUT,
     RoutingAction,
@@ -32,13 +34,18 @@ from e2e_ai.orchestrator.loop import (
     FailoverTracker,
     _invoke_role_with_failover,
 )
-from e2e_ai.orchestrator.store import create_repair_run, record_agent_invocation
+from e2e_ai.orchestrator.store import (
+    create_repair_run,
+    record_agent_invocation,
+)
 
 
 def _seed_project(conn: sqlite3.Connection, project_id: str = "demo") -> None:
     conn.execute(
         """
-        INSERT INTO projects (id, root_path, config_hash, created_at, updated_at)
+        INSERT INTO projects (
+            id, root_path, config_hash, created_at, updated_at
+        )
         VALUES (?, '.', 'test', datetime('now'), datetime('now'))
         """,
         (project_id,),
@@ -65,7 +72,11 @@ def _config(
         playwright=playwright,
         agents=(
             AgentConfig(id="planner", plugin=planner[0], profile="difficult"),
-            AgentConfig(id="implementer", plugin=implementer[0], profile="cheap"),
+            AgentConfig(
+                id="implementer",
+                plugin=implementer[0],
+                profile="cheap",
+            ),
             AgentConfig(
                 id="instrumenter",
                 plugin=instrumenter[0],
@@ -95,10 +106,18 @@ def _config(
 
 
 class _ScriptedAgent:
-    def __init__(self, agent_id: str, outcomes: list[tuple[bool, str]]) -> None:
-        self.id = agent_id
+    def __init__(
+        self,
+        agent_id: str,
+        outcomes: list[tuple[bool, str]],
+    ) -> None:
+        self._agent_id = agent_id
         self._outcomes = list(outcomes)
         self.calls = 0
+
+    @property
+    def id(self) -> str:
+        return self._agent_id
 
     def check_login(self):
         from e2e_ai.agents.capabilities import QUOTA_READY, AgentHealth
@@ -158,16 +177,26 @@ class _Bound:
     def id(self) -> str:
         return self._plugin.id
 
-    def run(self, prompt, *, workdir, timeout, log_dir=None, env=None, mcp=None):
+    def run(
+        self,
+        prompt,
+        *,
+        workdir,
+        timeout,
+        log_dir=None,
+        env=None,
+        mcp=None,
+    ):
         from e2e_ai.agents.base import AgentRunResult
 
         _ = workdir, timeout, log_dir, env, mcp
+        request = type("R", (), {"prompt": prompt})()
         if "instrumentation agent" in prompt:
-            result = self._plugin.instrument(type("R", (), {"prompt": prompt})())
+            result = self._plugin.instrument(request)
         elif "implementer agent" in prompt:
-            result = self._plugin.implement(type("R", (), {"prompt": prompt})())
+            result = self._plugin.implement(request)
         else:
-            result = self._plugin.plan(type("R", (), {"prompt": prompt})())
+            result = self._plugin.plan(request)
         return AgentRunResult(
             result.agent_id,
             result.exit_code,
@@ -177,23 +206,21 @@ class _Bound:
         )
 
 
-class _ScriptedRegistry:
-    def __init__(self, plugins: dict[str, _ScriptedAgent]) -> None:
-        self._plugins = plugins
-
-    def role(self, role: str):
-        role_map = {
-            "planner": "codex",
-            "implementer": "claude",
-            "instrumenter": "cursor",
-        }
-        return _Bound(self._plugins[role_map[role]])
+def _scripted_registry(
+    plugins: dict[str, _ScriptedAgent],
+    config: EffectiveConfig,
+) -> AgentRegistry:
+    return AgentRegistry(cast(dict[str, AgentPlugin], plugins), config)
 
 
 class TestProviderPool:
     def test_explicit_role_preferences(self) -> None:
         config = _config(planner=("codex", "claude", "cursor"))
-        assert provider_pool(config, "planner") == ("codex", "claude", "cursor")
+        assert provider_pool(config, "planner") == (
+            "codex",
+            "claude",
+            "cursor",
+        )
 
     def test_select_provider_skips_excluded(self, monkeypatch) -> None:
         config = _config(planner=("codex", "claude"))
@@ -218,6 +245,87 @@ class TestProviderPool:
         assert first.selected_provider == "codex"
         assert second.selected_provider == "claude"
         assert second.failover_retry is True
+
+    def test_select_provider_keeps_unknown_quota_for_failover(
+        self,
+        monkeypatch,
+    ) -> None:
+        config = _config(planner=("codex", "claude"))
+        plugins = create_agent_plugins(config)
+
+        # A logged-in provider with unknown quota must remain eligible once
+        # Codex has been excluded after reporting quota exhaustion.
+        monkeypatch.setattr(
+            "e2e_ai.agents.router._score_candidate",
+            lambda *_args, **_kwargs: -100,
+        )
+        selection = select_provider(
+            config,
+            "planner",
+            "difficult",
+            plugins,
+            excluded={"codex"},
+            failover_retry=True,
+        )
+
+        assert selection.selected_provider == "claude"
+
+    def test_unknown_quota_is_eligible_for_failover(self) -> None:
+        from e2e_ai.agents.capabilities import (
+            QUOTA_READY,
+            QUOTA_UNKNOWN,
+            AgentCapabilities,
+            AgentHealth,
+        )
+        from e2e_ai.agents.quota import QuotaSnapshot
+
+        class UnknownQuotaAgent:
+            @property
+            def id(self) -> str:
+                return "cursor"
+
+            def check_login(self):
+                return AgentHealth(
+                    agent_id="cursor",
+                    logged_in=True,
+                    verified=True,
+                    state=QUOTA_READY,
+                )
+
+            def discover(self):
+                return AgentCapabilities(plugin_id="cursor", schema_mode=True)
+
+            def quota(self, task_class: str):
+                _ = task_class
+                return QuotaSnapshot(
+                    plugin_id="cursor",
+                    state=QUOTA_UNKNOWN,
+                    optimistic=False,
+                )
+
+            def plan(self, request):
+                _ = request
+                raise NotImplementedError
+
+            def implement(self, request):
+                _ = request
+                raise NotImplementedError
+
+            def instrument(self, request):
+                _ = request
+                raise NotImplementedError
+
+            def supports_playwright_mcp(self) -> bool:
+                return False
+
+        score = _score_candidate(
+            UnknownQuotaAgent(),
+            task_class="difficult",
+            require_schema=True,
+            routing_allow_unknown=False,
+        )
+
+        assert score == -100
 
 
 class TestRoutingOutcomes:
@@ -279,8 +387,9 @@ class TestFailoverLoop:
 
         codex = _ScriptedAgent("codex", [(False, "not logged in")])
         claude = _ScriptedAgent("claude", [(True, "fix the button")])
-        registry = _ScriptedRegistry(
-            {"codex": codex, "claude": claude, "cursor": claude}
+        registry = _scripted_registry(
+            {"codex": codex, "claude": claude, "cursor": claude},
+            config,
         )
 
         monkeypatch.setattr(
@@ -336,8 +445,9 @@ class TestFailoverLoop:
 
         claude = _ScriptedAgent("claude", [(False, "rate limit exceeded")])
         codex = _ScriptedAgent("codex", [(True, "implemented")])
-        registry = _ScriptedRegistry(
-            {"codex": codex, "claude": claude, "cursor": claude}
+        registry = _scripted_registry(
+            {"codex": codex, "claude": claude, "cursor": claude},
+            config,
         )
 
         monkeypatch.setattr(
@@ -375,7 +485,10 @@ class TestFailoverLoop:
         monkeypatch,
     ) -> None:
         config = evolve(
-            _config(planner=("codex", "claude", "cursor"), max_switches=1),
+            _config(
+                planner=("codex", "claude", "cursor"),
+                max_switches=1,
+            ),
             project_root=tmp_path,
             state_dir=tmp_path / ".e2e-ai",
         )
@@ -389,7 +502,7 @@ class TestFailoverLoop:
             "claude": _ScriptedAgent("claude", [(False, "not logged in")]),
             "cursor": _ScriptedAgent("cursor", [(False, "not logged in")]),
         }
-        registry = _ScriptedRegistry(plugins)
+        registry = _scripted_registry(plugins, config)
 
         monkeypatch.setattr(
             "e2e_ai.orchestrator.loop.bind_role",
@@ -423,14 +536,12 @@ class TestInvocationHistory:
         db = tmp_path / "state.sqlite3"
         conn = ensure_database(db)
         _seed_project(conn)
-        run_id = create_repair_run(
-            conn,
-            evolve(
-                _config(),
-                project_root=tmp_path,
-                state_dir=tmp_path / ".e2e-ai",
-            ),
+        config = evolve(
+            _config(),
+            project_root=tmp_path,
+            state_dir=tmp_path / ".e2e-ai",
         )
+        run_id = create_repair_run(conn, config)
         record_agent_invocation(
             conn,
             run_id=run_id,
@@ -460,7 +571,8 @@ class TestInvocationHistory:
             failover_retry=True,
         )
         rows = conn.execute(
-            "SELECT agent_id, provider_order_json, switch_reason, failover_retry "
+            "SELECT "
+            "agent_id, provider_order_json, switch_reason, failover_retry "
             "FROM agent_invocations ORDER BY started_at"
         ).fetchall()
         assert rows[0]["agent_id"] == "codex"

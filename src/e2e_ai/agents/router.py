@@ -139,7 +139,7 @@ def _score_candidate(
     score = 0
     if not plugin.check_login().logged_in:
         return -1000
-    if not enough_quota(task_class, snapshot):
+    if not enough_quota(task_class, snapshot) and snapshot.state != "UNKNOWN":
         return -500
     if snapshot.state == "UNKNOWN" and not routing_allow_unknown:
         score -= 100
@@ -186,7 +186,11 @@ def select_provider(
             require_schema=require_schema,
             routing_allow_unknown=config.routing.allow_canary,
         )
-        if score < 0:
+        # An unknown quota is less preferred than a verified ready provider,
+        # but is still a valid failover target after a provider is exhausted.
+        # Scores at or below -500 represent an unavailable login or known
+        # insufficient quota and must not be invoked.
+        if score <= -500:
             skipped[candidate_id] = "unhealthy or unavailable"
             continue
         candidates.append((score, candidate_id, plugin))

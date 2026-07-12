@@ -38,6 +38,7 @@ def build_plan_mode_argv(
         "plan",
         "--output-format",
         "stream-json",
+        "--verbose",
     ]
     if schema is not None:
         argv.extend(["--json-schema", schema_json(schema)])
@@ -65,6 +66,7 @@ def build_implement_argv(
         permission_mode,
         "--output-format",
         "stream-json",
+        "--verbose",
         "--max-turns",
         str(max_turns),
     ]

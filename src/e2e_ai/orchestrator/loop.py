@@ -17,6 +17,7 @@ from ..agents.registry import AgentRegistry
 from ..agents.role_agent import bind_role
 from ..agents.router import ROLE_TASK_CLASS, ProviderSelection, select_provider
 from ..agents.routing_outcomes import (
+    EXIT_QUOTA_ERROR,
     RoutingAction,
     classify_invocation_exit,
     decide_routing_action,
@@ -30,7 +31,11 @@ from ..analysis import (
 from ..config import EffectiveConfig
 from ..inventory.models import DiscoveredTest
 from ..inventory.store import list_runnable_tests
-from ..isolation import IsolationBackend, IsolationContext, create_isolation_backend
+from ..isolation import (
+    IsolationBackend,
+    IsolationContext,
+    create_isolation_backend,
+)
 from ..isolation.models import EnvironmentLease
 from ..isolation.registry import POSTGRES_BACKENDS
 from ..mcp.models import AgentMcpAttachment
@@ -41,7 +46,10 @@ from ..mcp.sessions import (
 )
 from ..models import FailureInfo, TestStatus
 from ..planner import plan_is_blocked, test_selector
-from ..repair.stale_runs import REASON_PROCESS_INTERRUPTED, mark_run_interrupted
+from ..repair.stale_runs import (
+    REASON_PROCESS_INTERRUPTED,
+    mark_run_interrupted,
+)
 from ..repair.store import RepairStore
 from ..runner import (
     TestRunRequest,
@@ -52,7 +60,10 @@ from ..runner import (
     run_attempt,
 )
 from ..runner.results import load_playwright_json
-from ..runtime.session import managed_target_runtime, runtime_env_for_playwright
+from ..runtime.session import (
+    managed_target_runtime,
+    runtime_env_for_playwright,
+)
 from .decisions import (
     classify_external_blocker,
     should_escalate_to_instrumentation,
@@ -267,7 +278,7 @@ def _run_shard_coverage(
     min_tests_per_slot: int,
     summary: LoopSummary,
 ) -> tuple[bool, str | None]:
-    """Run tests until each fr-two slot has at least ``min_tests_per_slot`` passes."""
+    """Run tests until each fr-two slot has min pass count."""
 
     from ..integrations.fr_two.config import fr_two_isolation_section
     from ..integrations.fr_two.isolation import (
@@ -296,7 +307,9 @@ def _run_shard_coverage(
             prefer_unrun=executed_ids,
         )
         if test is None:
-            return True, f"could not schedule passing tests for slots: {sorted(needy)}"
+            return True, (
+                f"could not schedule passing tests for slots: {sorted(needy)}"
+            )
 
         state = run_one_test_until_resolved(
             conn=conn,
@@ -319,7 +332,7 @@ def _run_shard_coverage(
             continue
         if state.state == STATE_EXTERNAL_BLOCKER:
             return True, state.note
-        return True, f"shard coverage requires passing tests; failed: {test.id}"
+        return True, (f"shard coverage requires passing tests; failed: {test.id}")
 
     return False, None
 
@@ -334,7 +347,7 @@ def execute_attempt(
     isolation: IsolationBackend,
     attempt_id: str | None = None,
     runtime_env: Mapping[str, str] | None = None,
-) -> tuple[TestRunResult, FailureInfo | None, object]:
+) -> tuple[TestRunResult, FailureInfo | None, EnvironmentLease]:
     """Create environment, run Playwright, and persist the result."""
 
     attempt_id = attempt_id or new_attempt_id(attempt_index)
@@ -376,7 +389,7 @@ def _build_packet(
     test: DiscoveredTest,
     result: TestRunResult,
     failure: FailureInfo | None,
-    lease,
+    lease: EnvironmentLease | None,
 ):
     report = (
         load_playwright_json(result.json_report_path)
@@ -434,7 +447,8 @@ def _append_mcp_prompt(
     mcp: AgentMcpAttachment | None,
 ) -> str:
     if mcp is not None and mcp.enabled:
-        return prompt + "\n\n" + build_mcp_prompt_section(context=context, mcp=mcp)
+        section = build_mcp_prompt_section(context=context, mcp=mcp)
+        return prompt + "\n\n" + section
     if mcp is not None and mcp.degraded_reason:
         return prompt + f"\n\n(MCP unavailable: {mcp.degraded_reason})\n"
     return prompt
@@ -623,13 +637,18 @@ def _invoke_role_with_failover(
             )
 
         pool = list(selection.provider_order)
-        failed = failover.failed_providers(role) | {selection.selected_provider}
+        failed = failover.failed_providers(role) | {
+            selection.selected_provider,
+        }
         providers_remaining = any(provider not in failed for provider in pool)
         action = decide_routing_action(
             exit_class or "task_failure",
             config=config,
             external_blocker=external_blocker,
-            same_provider_retries_left=failover.schema_retries_left(role, config),
+            same_provider_retries_left=failover.schema_retries_left(
+                role,
+                config,
+            ),
             providers_remaining=providers_remaining,
             switches_remaining=failover.can_switch(config),
         )
@@ -659,6 +678,13 @@ def _invoke_role_with_failover(
         )
 
 
+def _role_plugin(registry: AgentRegistry, role: str) -> AgentPlugin:
+    """Return the configured plugin bound to a loop role."""
+
+    role_id = registry.role(role).id
+    return registry._plugins[role_id]  # noqa: SLF001
+
+
 def _invoke_agent(
     registry: AgentRegistry,
     role: str,
@@ -673,7 +699,7 @@ def _invoke_agent(
     lease: EnvironmentLease | None,
     plugin: AgentPlugin,
     failover: FailoverTracker | None = None,
-) -> tuple[str, bool, str | None]:
+) -> tuple[str, bool, str | None, str | None]:
     _ = plugin
     tracker = failover or FailoverTracker()
     outcome = _invoke_role_with_failover(
@@ -689,7 +715,7 @@ def _invoke_agent(
         lease=lease,
         failover=tracker,
     )
-    return outcome.text, outcome.ok, outcome.mcp_error
+    return outcome.text, outcome.ok, outcome.mcp_error, outcome.exit_class
 
 
 def handle_failed_attempt(
@@ -746,14 +772,18 @@ def handle_failed_attempt(
 
     if escalate:
         _transition(repair_state, EVENT_INSTRUMENT)
-        instr_prompt = build_instrumentation_prompt(context, config=config, test=test)
+        instr_prompt = build_instrumentation_prompt(
+            context,
+            config=config,
+            test=test,
+        )
         if dry_run_agents:
             return RepairDecision(
                 action="instrument_dry_run",
                 next_state=STATE_INSTRUMENTING,
                 dry_run_prompt=instr_prompt,
             )
-        _, instr_ok, mcp_err = _invoke_agent(
+        _, instr_ok, mcp_err, _instr_exit_class = _invoke_agent(
             registry,
             "instrumenter",
             instr_prompt,
@@ -764,7 +794,7 @@ def handle_failed_attempt(
             log_dir=log_dir,
             context=context,
             lease=lease,
-            plugin=registry._plugins.get(registry.role("instrumenter").id),  # noqa: SLF001
+            plugin=_role_plugin(registry, "instrumenter"),
             failover=tracker,
         )
         if mcp_err:
@@ -795,7 +825,7 @@ def handle_failed_attempt(
             dry_run_prompt=plan_prompt,
         )
 
-    plan_text, ok, mcp_err = _invoke_agent(
+    plan_text, ok, mcp_err, plan_exit_class = _invoke_agent(
         registry,
         "planner",
         plan_prompt,
@@ -806,7 +836,7 @@ def handle_failed_attempt(
         log_dir=log_dir,
         context=context,
         lease=lease,
-        plugin=registry._plugins.get(registry.role("planner").id),  # noqa: SLF001
+        plugin=_role_plugin(registry, "planner"),
         failover=tracker,
     )
     if mcp_err:
@@ -818,6 +848,13 @@ def handle_failed_attempt(
         )
 
     if not ok:
+        if plan_exit_class == EXIT_QUOTA_ERROR:
+            return RepairDecision(
+                action="agent_quota_blocker",
+                next_state=STATE_EXTERNAL_BLOCKER,
+                stop_run=True,
+                reason="all configured planner providers exhausted quota",
+            )
         repair_state.note = "planner agent failed after provider failover"
         return RepairDecision(
             action="rerun",
@@ -846,8 +883,13 @@ def handle_failed_attempt(
     repair_state.last_plan_id = plan_id
 
     _transition(repair_state, EVENT_IMPLEMENT)
-    impl_prompt = build_implementer_prompt(plan_text, context, config=config, test=test)
-    impl_text, impl_ok, impl_mcp_err = _invoke_agent(
+    impl_prompt = build_implementer_prompt(
+        plan_text,
+        context,
+        config=config,
+        test=test,
+    )
+    impl_text, impl_ok, impl_mcp_err, _impl_exit_class = _invoke_agent(
         registry,
         "implementer",
         impl_prompt,
@@ -858,7 +900,7 @@ def handle_failed_attempt(
         log_dir=log_dir,
         context=context,
         lease=lease,
-        plugin=registry._plugins.get(registry.role("implementer").id),  # noqa: SLF001
+        plugin=_role_plugin(registry, "implementer"),
         failover=tracker,
     )
     if impl_mcp_err:
@@ -867,6 +909,13 @@ def handle_failed_attempt(
             next_state=STATE_EXTERNAL_BLOCKER,
             stop_run=True,
             reason=impl_mcp_err,
+        )
+    if not impl_ok and _impl_exit_class == EXIT_QUOTA_ERROR:
+        return RepairDecision(
+            action="agent_quota_blocker",
+            next_state=STATE_EXTERNAL_BLOCKER,
+            stop_run=True,
+            reason="all configured implementer providers exhausted quota",
         )
     _ = impl_text
     _transition(repair_state, EVENT_IMPLEMENTED)
@@ -1037,7 +1086,7 @@ def run_one_test_until_resolved(
             say(f"  [fail] {repair_state.note}")
             return repair_state
 
-        # Rerun after a successful implement; otherwise apply the decision state
+        # Rerun after implement; otherwise apply the decision state
         # (e.g. planner failed while still in planning).
         if repair_state.state == STATE_IMPLEMENTED:
             _transition(repair_state, EVENT_RERUN)
@@ -1093,7 +1142,9 @@ def run_repair_loop(
     previous_run_id: str | None = None
     if only_failed:
         repair_store = RepairStore(conn)
-        previous_run_id = repair_store.latest_finished_run_id(config.project_id)
+        previous_run_id = repair_store.latest_finished_run_id(
+            config.project_id,
+        )
         if previous_run_id is None:
             say("No previous finished run with attempts; nothing to repair.")
             summary = LoopSummary(status="passed", reason="no previous run")
@@ -1123,8 +1174,8 @@ def run_repair_loop(
 
     if min_tests_per_slot is not None:
         say(
-            f"Scheduling shard coverage: at least {min_tests_per_slot} passing "
-            f"test(s) per slot."
+            f"Scheduling shard coverage: at least {min_tests_per_slot} "
+            f"passing test(s) per slot."
         )
     elif only_failed:
         say(f"Scheduling {len(pending)} test(s) that failed in run {previous_run_id}.")
@@ -1176,7 +1227,9 @@ def run_repair_loop(
                         dry_run_agents=dry_run_agents,
                         runtime_env=runtime_env,
                     )
-                    summary.reports.append(_test_report_from_state(test, state))
+                    summary.reports.append(
+                        _test_report_from_state(test, state),
+                    )
 
                     if state.state == STATE_EXTERNAL_BLOCKER:
                         if config.repair_policy.stop_on_first_unsolvable:
@@ -1293,7 +1346,13 @@ class _LegacyStore:
     def start_run(self, project_id: str, *, reason: str | None = None) -> str:
         return self._inner.start_run(project_id, reason=reason)
 
-    def finish_run(self, run_id: str, *, status: str, reason: str | None = None):
+    def finish_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        reason: str | None = None,
+    ):
         return self._inner.finish_run(run_id, status=status, reason=reason)
 
     def has_ever_passed(self, test_id: str) -> bool:
