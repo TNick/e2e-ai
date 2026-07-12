@@ -22,7 +22,9 @@ jobs:
           cache: pip
 
       - name: Install package
-        run: python -m pip install -e ".[dev]"
+        # Include the optional monitor extra so the monitor web tests run in CI
+        # (they are skipped automatically when the extra is not installed).
+        run: python -m pip install -e ".[dev,monitor]"
 
       - name: Ruff check
         run: python -m ruff check src tests

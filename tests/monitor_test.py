@@ -14,8 +14,15 @@ from e2e_ai.db.migrations import ensure_database
 from e2e_ai.monitor import build_argv, command_schema
 from e2e_ai.monitor.commands import COMMANDS, CommandValidationError, get_command
 from e2e_ai.monitor.processes import ProcessManager
-from e2e_ai.monitor.server import build_monitor
+from e2e_ai.monitor.server import build_monitor, monitor_extra_available
 from e2e_ai.monitor.store import MonitorError, MonitorStore
+
+# The monitor web server needs the optional ``monitor`` extra (fastapi/uvicorn);
+# CI installs only the base + dev deps, so skip those tests when it is absent.
+requires_monitor = pytest.mark.skipif(
+    not monitor_extra_available(),
+    reason='monitor extra not installed (pip install "e2e-ai[monitor]")',
+)
 
 
 def _now() -> str:
@@ -227,6 +234,7 @@ def _client(tmp_path):
     return TestClient(app), info
 
 
+@requires_monitor
 class TestApi:
     def test_health(self, tmp_path):
         client, _ = _client(tmp_path)
@@ -284,6 +292,7 @@ class TestApi:
 
 
 # ── CLI wiring ───────────────────────────────────────────────────────────────
+@requires_monitor
 class TestCliWiring:
     def test_build_monitor_passes_settings(self, tmp_path):
         db = tmp_path / "state.sqlite3"
@@ -352,6 +361,9 @@ class TestMonitorConfig:
             captured.update(kwargs)
             return (object(), None, None, None)
 
+        # build_monitor/run_server are stubbed, so the fastapi/uvicorn extra is
+        # not needed for these option-resolution tests.
+        monkeypatch.setattr(mon, "ensure_monitor_extra", lambda: None)
         monkeypatch.setattr(mon, "build_monitor", fake_build)
         monkeypatch.setattr(mon, "run_server", lambda app, *, host, port: None)
         from e2e_ai.cli import build_cli
@@ -377,6 +389,7 @@ class TestMonitorConfig:
 
 
 # ── /api/config (Settings "everything") ──────────────────────────────────────
+@requires_monitor
 class TestConfigEndpoint:
     def test_config_unavailable_without_config(self, tmp_path):
         client, _ = _client(tmp_path)
