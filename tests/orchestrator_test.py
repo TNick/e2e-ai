@@ -25,6 +25,7 @@ from e2e_ai.orchestrator import (
     run_one_test_until_resolved,
     validate_transition,
 )
+from e2e_ai.orchestrator.loop import _will_start_docker_containers, run_repair_loop
 from e2e_ai.orchestrator.models import (
     STATE_FAILED,
     STATE_PASSED,
@@ -301,6 +302,65 @@ class TestLoop:
             "SELECT last_status FROM tests WHERE id = ?", (TEST.id,)
         ).fetchone()
         assert row["last_status"] == "passing"
+        conn.close()
+
+
+class TestDockerStartupMessages:
+    def test_will_start_docker_for_postgres_isolation(self, tmp_path):
+        from attrs import evolve
+
+        base = _config(tmp_path)
+        config = evolve(
+            base,
+            isolation=evolve(base.isolation, backend="docker_postgres"),
+        )
+        assert _will_start_docker_containers(config, start_runtime=False)
+        assert not _will_start_docker_containers(
+            evolve(
+                config,
+                isolation=evolve(config.isolation, backend="none"),
+            ),
+            start_runtime=False,
+        )
+
+    def test_will_start_docker_for_compose_target_runtime(self, tmp_path):
+        from attrs import evolve
+
+        base = _config(tmp_path)
+        config = evolve(
+            base,
+            target_runtime=evolve(base.target_runtime, backend="docker_compose"),
+        )
+        assert _will_start_docker_containers(config, start_runtime=True)
+        assert not _will_start_docker_containers(config, start_runtime=False)
+
+    def test_repair_loop_reports_docker_startup(self, tmp_path, monkeypatch):
+        from attrs import evolve
+
+        base = _config(tmp_path)
+        config = evolve(
+            base,
+            isolation=evolve(base.isolation, backend="docker_postgres"),
+        )
+        conn = _seeded_conn(config)
+        registry = _FakeRegistry()
+        messages: list[str] = []
+
+        def fake(config, request, **kwargs):
+            _ = config, request, kwargs
+            return _result(tmp_path, passed=True), None
+
+        monkeypatch.setattr("e2e_ai.orchestrator.loop.run_attempt", fake)
+        run_repair_loop(
+            config,
+            conn,
+            registry,
+            isolation=_FakeIsolation(),
+            reporter=messages.append,
+            start_runtime=False,
+        )
+        assert messages[0] == "Scheduling 1 test(s)."
+        assert messages[1] == "Starting Docker containers..."
         conn.close()
 
     def test_failed_test_invokes_planner_then_implementer(self, tmp_path, monkeypatch):

@@ -32,6 +32,7 @@ from ..inventory.models import DiscoveredTest
 from ..inventory.store import list_runnable_tests
 from ..isolation import IsolationBackend, IsolationContext, create_isolation_backend
 from ..isolation.models import EnvironmentLease
+from ..isolation.registry import POSTGRES_BACKENDS
 from ..mcp.models import AgentMcpAttachment
 from ..mcp.sessions import (
     cleanup_mcp_session,
@@ -1030,6 +1031,18 @@ def run_one_test_until_resolved(
     return repair_state
 
 
+def _will_start_docker_containers(
+    config: EffectiveConfig,
+    *,
+    start_runtime: bool,
+) -> bool:
+    """Return whether the repair loop will bring up Docker before tests run."""
+
+    if start_runtime and config.target_runtime.backend == "docker_compose":
+        return True
+    return config.isolation.backend in POSTGRES_BACKENDS
+
+
 def run_repair_loop(
     config: EffectiveConfig,
     conn: sqlite3.Connection,
@@ -1075,6 +1088,8 @@ def run_repair_loop(
         )
     else:
         say(f"Scheduling {len(pending)} test(s).")
+    if _will_start_docker_containers(config, start_runtime=start_runtime):
+        say("Starting Docker containers...")
     context = _isolation_context(config)
 
     def _runtime_outcome() -> str:

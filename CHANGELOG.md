@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The repair loop prints `Starting Docker containers...` after scheduling when
+  Docker Compose startup is required, so long container bootstraps are easier
+  to understand.
 - fr-two example config assigns planner to Codex, implementer to Claude, and
   instrumenter to Cursor so local runs exercise all three providers.
 
