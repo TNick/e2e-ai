@@ -22,6 +22,8 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    # Required by fastapi.testclient / starlette.testclient for the monitor tests.
+    "httpx>=0.27",
 ]
 monitor = [
     "fastapi>=0.115",

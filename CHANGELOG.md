@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - install monitor optional deps in ci
+- add `httpx` dev dependency required by `fastapi.testclient` so the monitor API tests run in ci
 
 ## [0.1.1] - 2026-07-12
 
