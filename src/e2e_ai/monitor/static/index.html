@@ -114,7 +114,10 @@ const NAV = [
 ];
 const state = { view: "active", info: null, schemas: [], sel: null, rev: "",
                 sort: {}, filter: {}, drawerRender: null,
-                descOpen: {}, settingsFull: false };
+                descOpen: {}, settingsFull: false,
+                logFormatSticky: {}, agentDrawerPolling: null };
+let agentDrawGen = 0;
+let commandDrawGen = 0;
 
 async function api(path, opts) {
   const r = await fetch("/api" + path, opts);
@@ -193,15 +196,40 @@ function isCursorStreamJsonl(text) {
   return hits >= 2;
 }
 
-function resolveAgentLogFormat(text, agentId) {
+function resolveAgentLogFormat(text, agentId, stickyKey) {
   const raw = String(text || "");
-  if (!raw.trim()) return null;
-  if (agentId === "codex" || isCodexJsonl(raw)) return "codex";
+  if (!raw.trim()) return { fmt: null, forced: false };
   const id = String(agentId || "");
-  if (isCursorStreamJsonl(raw) || (/^cursor/i.test(id) && parseJsonlStream(raw).events.length)) {
-    return "cursor";
+  if (/^codex/i.test(id)) return { fmt: "codex", forced: true };
+  if (/^cursor/i.test(id)) return { fmt: "cursor", forced: true };
+  if (isCodexJsonl(raw)) {
+    if (stickyKey) state.logFormatSticky[stickyKey] = "codex";
+    return { fmt: "codex", forced: false };
   }
-  return null;
+  if (isCursorStreamJsonl(raw)) {
+    if (stickyKey) state.logFormatSticky[stickyKey] = "cursor";
+    return { fmt: "cursor", forced: false };
+  }
+  if (stickyKey && state.logFormatSticky[stickyKey]) {
+    return { fmt: state.logFormatSticky[stickyKey], forced: true };
+  }
+  return { fmt: null, forced: false };
+}
+
+function renderJsonlStreamingPlaceholder(preamble, fullText) {
+  const buf = preamble.length
+    ? normalizeDisplayText(preamble.join("\n"))
+    : normalizeDisplayText(fullText);
+  const parts = ['<div class="codex-log"><div class="codex-meta">Streaming…</div>'];
+  if (buf.trim()) {
+    parts.push(renderCursorCollapsiblePre(
+      `Buffer (${buf.length.toLocaleString()} chars)`,
+      buf,
+      0,
+    ));
+  }
+  parts.push("</div>");
+  return parts.join("");
 }
 
 function extractCursorMessageText(message) {
@@ -379,9 +407,12 @@ function buildCursorDisplayUnits(events) {
   return { units, toolCallsById };
 }
 
-function renderCursorLog(text) {
+function renderCursorLog(text, opts = {}) {
   const { preamble, events } = parseJsonlStream(text);
-  if (!events.length) return `<pre>${esc(normalizeDisplayText(text))}</pre>`;
+  if (!events.length) {
+    if (opts.forced) return renderJsonlStreamingPlaceholder(preamble, text);
+    return `<pre>${esc(normalizeDisplayText(text))}</pre>`;
+  }
   const { units, toolCallsById } = buildCursorDisplayUnits(events);
   const parts = ['<div class="codex-log">'];
   if (preamble.length) {
@@ -562,9 +593,12 @@ function renderCodexMetaEvent(ev) {
   return `<div class="codex-meta">${esc(t)}</div>`;
 }
 
-function renderCodexLog(text) {
+function renderCodexLog(text, opts = {}) {
   const { preamble, events } = parseCodexStream(text);
-  if (!events.length) return `<pre>${esc(normalizeDisplayText(text))}</pre>`;
+  if (!events.length) {
+    if (opts.forced) return renderJsonlStreamingPlaceholder(preamble, text);
+    return `<pre>${esc(normalizeDisplayText(text))}</pre>`;
+  }
   const { meta, items } = codexItemRecords(events);
   const parts = ['<div class="codex-log">'];
   if (preamble.length) {
@@ -576,12 +610,12 @@ function renderCodexLog(text) {
   return parts.join("");
 }
 
-function renderAgentLog(text, agentId) {
+function renderAgentLog(text, agentId, stickyKey) {
   const raw = String(text || "");
   if (!raw.trim()) return "";
-  const fmt = resolveAgentLogFormat(raw, agentId);
-  if (fmt === "codex") return renderCodexLog(raw);
-  if (fmt === "cursor") return renderCursorLog(raw);
+  const { fmt, forced } = resolveAgentLogFormat(raw, agentId, stickyKey);
+  if (fmt === "codex") return renderCodexLog(raw, { forced });
+  if (fmt === "cursor") return renderCursorLog(raw, { forced });
   return `<pre>${esc(normalizeDisplayText(raw))}</pre>`;
 }
 
@@ -991,27 +1025,30 @@ function _renderAgentDrawerBody(a, out) {
       + ` · Run: <a data-run="${esc(a.run_id)}">${esc(a.run_id)}</a></div>`;
   }
   if (a.repair_plan) {
-    const planHtml = renderAgentLog(a.repair_plan.plan_text, a.agent_id);
+    const planHtml = renderAgentLog(a.repair_plan.plan_text, a.agent_id, `plan:${a.id}`);
     body += `<h3>Repair plan</h3>${planHtml}`;
     if (a.repair_plan.outcome) {
       body += `<div class="muted">Outcome: ${esc(a.repair_plan.outcome)}</div>`;
     }
   }
-  const liveOutput = (out && out.output) || (a.stdout || "");
+  const running = !a.finished_at;
+  const liveOutput = running && out
+    ? (out.output ?? a.stdout ?? "")
+    : (a.stdout || (out && out.output) || "");
   const planText = (a.repair_plan && a.repair_plan.plan_text || "").trim();
   const stdoutText = String(liveOutput || "").trim();
   const showLog = stdoutText && stdoutText !== planText;
-  const running = !a.finished_at;
+  const logSticky = `agent:${a.id}`;
   const logLabel = running ? "Live log"
     : a.role === "implementer" ? "Implementation log"
     : a.role === "instrumenter" ? "Instrumentation plan"
     : showLog ? "Agent log" : "";
   if (showLog && logLabel) {
-    body += `<h3>${logLabel}</h3>${renderAgentLog(liveOutput, a.agent_id)}`;
+    body += `<h3>${logLabel}</h3>${renderAgentLog(liveOutput, a.agent_id, logSticky)}`;
   } else if (!a.repair_plan && stdoutText) {
-    body += `<h3>${logLabel || "Output"}</h3>${renderAgentLog(liveOutput, a.agent_id)}`;
+    body += `<h3>${logLabel || "Output"}</h3>${renderAgentLog(liveOutput, a.agent_id, logSticky)}`;
   }
-  if (a.stderr) body += `<h3>Stderr</h3>${renderAgentLog(a.stderr, a.agent_id)}`;
+  if (a.stderr) body += `<h3>Stderr</h3>${renderAgentLog(a.stderr, a.agent_id, `${logSticky}:stderr`)}`;
   if (!a.repair_plan && !stdoutText && !a.stderr) {
     body += running
       ? '<div class="muted" style="margin-top:8px">Waiting for agent output…</div>'
@@ -1031,14 +1068,30 @@ function _renderAgentDrawerBody(a, out) {
 
 async function showAgent(id) {
   state.drawerRender = () => showAgent(id);
-  clearInterval(agentOutTimer);
+  clearTimeout(agentOutTimer);
+  agentOutTimer = null;
+  state.agentDrawerPolling = id;
+  const myGen = ++agentDrawGen;
   const draw = async () => {
-    const [a, out] = await Promise.all([
-      api("/agents/" + encodeURIComponent(id)),
-      api("/agents/" + encodeURIComponent(id) + "/output"),
-    ]);
-    openDrawer(`${esc(a.role)} · ${esc(a.agent_id)}`, _renderAgentDrawerBody(a, out));
-    if (!a.finished_at) agentOutTimer = setTimeout(draw, 1000);
+    if (myGen !== agentDrawGen) return;
+    try {
+      const [a, out] = await Promise.all([
+        api("/agents/" + encodeURIComponent(id)),
+        api("/agents/" + encodeURIComponent(id) + "/output"),
+      ]);
+      if (myGen !== agentDrawGen) return;
+      openDrawer(`${esc(a.role)} · ${esc(a.agent_id)}`, _renderAgentDrawerBody(a, out));
+      if (!a.finished_at) {
+        agentOutTimer = setTimeout(draw, 1000);
+      } else {
+        state.agentDrawerPolling = null;
+        agentOutTimer = null;
+      }
+    } catch (e) {
+      if (myGen !== agentDrawGen) return;
+      openDrawer("Agent", `<div class="destructive">Error: ${esc(e.message)}</div>`);
+      state.agentDrawerPolling = null;
+    }
   };
   draw();
 }
@@ -1121,16 +1174,21 @@ async function submitCommand(c) {
 }
 async function showOutput(id) {
   state.drawerRender = null;
-  clearInterval(outTimer);
+  state.agentDrawerPolling = null;
+  clearTimeout(outTimer);
+  outTimer = null;
+  const myGen = ++commandDrawGen;
   const draw = async () => {
+    if (myGen !== commandDrawGen) return;
     const [r, out] = await Promise.all([
       api("/command-runs/" + encodeURIComponent(id)),
       api("/command-runs/" + encodeURIComponent(id) + "/output"),
     ]);
+    if (myGen !== commandDrawGen) return;
     openDrawer("Command run " + esc(id),
       `<div class="muted">${esc(r.command_id)} · <span class="${scls(r.status)}">${esc(r.status)}</span>
         · exit ${esc(r.exit_code ?? "—")}</div>${
-        renderAgentLog(out.output || "(no output yet)", null)}`);
+        renderAgentLog(out.output || "(no output yet)", null, `cmd:${id}`)}`);
     if (r.status === "running") outTimer = setTimeout(draw, 1000);
   };
   draw();
@@ -1181,7 +1239,13 @@ function openDrawer(title, html) {
 function dismissDrawer() {
   const d = document.getElementById("drawer");
   if (d) d.remove();
-  clearInterval(outTimer);
+  clearTimeout(outTimer);
+  clearTimeout(agentOutTimer);
+  outTimer = null;
+  agentOutTimer = null;
+  agentDrawGen += 1;
+  commandDrawGen += 1;
+  state.agentDrawerPolling = null;
   state.drawerRender = null;
 }
 function closeDrawer() {
@@ -1262,7 +1326,9 @@ async function tick() {
   if (rev === state.rev && !live) return;
   state.rev = rev;
   render(false);
-  if (document.getElementById("drawer") && state.drawerRender) state.drawerRender();
+  if (document.getElementById("drawer") && state.drawerRender && !state.agentDrawerPolling) {
+    state.drawerRender();
+  }
 }
 
 async function boot() {

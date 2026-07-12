@@ -74,6 +74,10 @@ All notable changes to this project will be documented in this file.
 - Monitor agent detail drawer formats Cursor ``stream-json`` stdout the same
   way: merged thinking blocks, one card per tool call (read/grep/plan with
   collapsible output), collapsed user prompts, and session/result metadata.
+- Live agent log refresh no longer flickers between parsed and raw views:
+  format is locked by agent id (``codex_*``, ``cursor_*``), sticky for command
+  runs, streaming placeholder while JSONL lines are incomplete, and the global
+  tick no longer restarts an already-polling agent drawer.
 - Repair loop prints prior attempt history as ``(N runs, M failures)`` when a
   test has been executed before (replacing the misleading ``(regression)`` /
   ``(seen before)`` labels).
